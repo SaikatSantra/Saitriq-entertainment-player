@@ -1,3 +1,7 @@
+api_version = "2025-10"
+
+[[extensions]]
 name = "audio-video-extention"
+handle = "audio-video-extention"
 type = "theme"
-uid = "c18a6a27-6eaf-8ca5-794b-3a82e21df93138d72197"
+uid = "c18a6a27-6eaf-8ca5-794b-3a82e21df931"

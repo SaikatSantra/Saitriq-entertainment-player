@@ -35,21 +35,27 @@ model Session {
 
 model PlaylistMedia {
   id           Int      @id @default(autoincrement())
-  title        String   @db.VarChar(255)
-  mediaType    String   @db.VarChar(20) // "audio" or "video"
-  sourceUrl    String   @db.Text
-  thumbnailUrl String?  @db.Text
+  shop         String   // owning shop domain
+  title        String
+  mediaType    String   // "audio" or "video"
+  sourceUrl    String
+  thumbnailUrl String?
   isActive     Boolean  @default(true)
   sortOrder    Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  @@index([isActive, sortOrder])
+  @@index([shop, isActive, sortOrder])
+  @@unique([shop, title])
 }
 
 model AppSettings {
   id        Int      @id @default(autoincrement())
-  key       String   @unique @db.VarChar(100)
-  value     String   @db.Text
+  shop      String   // owning shop domain
+  key       String
+  value     String
   updatedAt DateTime @updatedAt
+
+  @@unique([shop, key])
+  @@index([shop])
 }
