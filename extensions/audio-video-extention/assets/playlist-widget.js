@@ -461,6 +461,13 @@
       video.addEventListener('pause',      () => this._setPlayState(false));
       video.addEventListener('error',      (e) => console.warn('[AVP] video error', e));
 
+      // Detect real dimensions and apply exact aspect ratio to the stage
+      video.addEventListener('loadedmetadata', () => {
+        if (video.videoWidth && video.videoHeight) {
+          this.$.stage.style.setProperty('--avp-stage-ratio', `${video.videoWidth}/${video.videoHeight}`);
+        }
+      }, { once: true });
+
       if (mediaEl) {
         mediaEl.innerHTML = '';
         mediaEl.appendChild(video);
