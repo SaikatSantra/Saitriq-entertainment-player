@@ -2,8 +2,8 @@
   "name": "audio-video-player",
   "private": true,
   "scripts": {
-    "build": "react-router build",
-    "vercel-build": "node vercel-build.js",
+    "build": "prisma generate && react-router build",    
+    "build:deploy": "prisma generate && prisma db push && react-router build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
