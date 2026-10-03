@@ -2,7 +2,7 @@
 
 client_id = "f44b80a06cf9296325c18eca3c544299"
 name = "Audio and Video Playlist"
-application_url = "https://example.com"
+application_url = "https://saitriq-entertainment-player.vercel.app"
 embedded = true
 
 [build]
@@ -21,12 +21,12 @@ api_version = "2026-10"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_files,read_themes,write_files,write_themes"
+scopes = "read_files,read_themes,write_files,write_themes,write_app_proxy"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/api/auth" ]
 
 [app_proxy]
-url = "https://example.com/apps/playlist"
+url = "https://saitriq-entertainment-player.vercel.app/apps/playlist"
 subpath = "playlist"
 prefix = "apps"

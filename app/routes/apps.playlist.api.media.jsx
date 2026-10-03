@@ -13,6 +13,7 @@
  */
 
 import prisma from "../db.server";
+import { authenticate } from "../shopify.server";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -38,6 +39,8 @@ export const action = async ({ request }) => {
 };
 
 export const loader = async ({ request }) => {
+  await authenticate.public.appProxy(request);
+
   try {
     const url  = new URL(request.url);
 

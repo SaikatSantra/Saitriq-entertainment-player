@@ -9,8 +9,8 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -59,3 +59,13 @@ model AppSettings {
   @@unique([shop, key])
   @@index([shop])
 }
+
+model AppSubscription {
+  id                    Int      @id @default(autoincrement())
+  shop                  String   @unique
+  planId                String   @default("FREE") // FREE | PRO | UNLIMITED
+  shopifySubscriptionId String?  // null for FREE plan
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+

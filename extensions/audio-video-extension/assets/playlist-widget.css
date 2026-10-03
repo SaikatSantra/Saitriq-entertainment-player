@@ -7,7 +7,7 @@
 :root {
   --avp-accent:     #667eea;
   --avp-accent-2:   #764ba2;
-  --avp-radius:     14px;
+  --avp-radius:     5px 5px 0 0;
   --avp-shadow:     0 8px 40px rgba(0,0,0,0.35);
   --avp-panel-w:    320px;
   --avp-fab-size:   52px;
@@ -189,8 +189,10 @@
 .avp-card__media > video {
   width: 100%; height: 100%;
   border: none; display: block;
-  object-fit: contain;   /* show full frame at original ratio */
+  object-fit: contain;
   background: #000;
+  /* YouTube iframes block pointer events to our overlay — disable them */
+  pointer-events: none;
 }
 
 /* Shuffle-in animation */
@@ -202,33 +204,51 @@
 .avp-card--shuffle-in { animation: avp-shuffle-in 0.44s cubic-bezier(0.4,0,0.2,1) forwards; }
 .avp-card--hidden { pointer-events: none; }
 
-/* ── Controls overlay — on top of the video ─────────────────────────────── */
+/* ── Controls overlay — auto-hide, show on hover ────────────────────────── */
 .avp-overlay-controls {
-  position:   absolute;
-  bottom:     0;
-  left:       0;
-  right:      0;
-  z-index:    5;
-  /* frosted-glass gradient from transparent top to dark bottom */
-  background: linear-gradient(to top,
-    rgba(0,0,0,0.72) 0%,
-    rgba(0,0,0,0.38) 60%,
+  position:       absolute;
+  bottom:         0;
+  left:           0;
+  right:          0;
+  z-index:        11;
+  background:     linear-gradient(to top,
+    rgba(0,0,0,0.65) 0%,
+    rgba(0,0,0,0.20) 50%,
     transparent 100%
   );
-  padding:    8px 10px 10px;
-  display:    flex;
+  padding:        6px 8px 8px;
+  display:        flex;
   flex-direction: column;
-  gap:        6px;
+  gap:            4px;
   pointer-events: auto;
-  z-index: 11 ;
+
+  /* auto-hide: invisible by default */
+  opacity:    0;
+  transition: opacity 0.25s ease;
 }
 
-/* ── Transport row ───────────────────────────────────────────────────────── */
+/* show controls when hovering the stage */
+.avp-stage:hover .avp-overlay-controls,
+.avp-stage:focus-within .avp-overlay-controls {
+  opacity: 1;
+}
+
+/* also show briefly when playing starts (JS adds this class) */
+.avp-overlay-controls--visible {
+  opacity: 1;
+}
+
+/* ── Track info strip — hide title and badge ─────────────────────────────── */
+.avp-overlay-info    { display: none !important; }
+.avp-overlay-badge   { display: none !important; }
+.avp-overlay-title   { display: none !important; }
+
+/* ── Transport row — left-aligned, compact ───────────────────────────────── */
 .avp-transport {
-  display:         flex;
-  align-items:     center;
-  justify-content: center;
-  gap:             6px;
+  display:     flex;
+  align-items: center;
+  justify-content: flex-start;   /* left-align */
+  gap:         4px;
 }
 
 .avp-btn {
@@ -250,26 +270,26 @@
 .avp-btn:disabled  { opacity: 0.35; cursor: not-allowed; transform: none; }
 
 .avp-btn--prev,
-.avp-btn--next     { width:34px; height:34px; }
+.avp-btn--next     { width:26px; height:26px; }
 .avp-btn--prev svg,
-.avp-btn--next svg { width:18px; height:18px; }
+.avp-btn--next svg { width:13px; height:13px; }
 
-/* Play button — accent colour, slightly larger */
+/* Play button — accent colour */
 .avp-btn--play {
-  width:  46px;
-  height: 46px;
+  width:  34px;
+  height: 34px;
   background: linear-gradient(135deg, var(--avp-accent), var(--avp-accent-2));
   border-color: transparent;
-  box-shadow: 0 3px 12px rgba(102,126,234,0.50);
+  box-shadow: 0 2px 8px rgba(102,126,234,0.50);
 }
-.avp-btn--play svg     { width:22px; height:22px; }
+.avp-btn--play svg     { width:16px; height:16px; }
 .avp-btn--play:hover   { background: linear-gradient(135deg,var(--avp-accent-2),var(--avp-accent)); }
 .avp-btn--play:disabled{ background: rgba(255,255,255,0.15); box-shadow:none; }
 
-.avp-btn--mute     { width:30px; height:30px; }
-.avp-btn--mute svg { width:16px; height:16px; }
+.avp-btn--mute     { width:24px; height:24px; }
+.avp-btn--mute svg { width:12px; height:12px; }
 .avp-btn--mute[aria-pressed="true"] {
-  background: rgba(220,38,38,0.45);
+  background:   rgba(220,38,38,0.45);
   border-color: rgba(220,38,38,0.4);
 }
 
@@ -281,7 +301,7 @@
 }
 .avp-progress {
   flex:          1;
-  height:        3px;
+  height:        2px;
   background:    rgba(255,255,255,0.25);
   border-radius: 99px;
   position:      relative;
@@ -321,7 +341,7 @@
   background:    rgba(15,15,25,0.92);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-radius: 0 0 var(--avp-radius) var(--avp-radius);
+  border-radius: 0 0 5px 5px;
   overflow:      hidden;
   flex-shrink:   0;
 }

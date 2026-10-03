@@ -18,16 +18,21 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Audio &amp; Video Playlist</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Turn your storefront into a polished media hub with a floating playlist widget.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
             <label className={styles.label}>
               <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+              <input
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="your-store.myshopify.com"
+              />
+              <span>Example: your-store.myshopify.com</span>
             </label>
             <button className={styles.button} type="submit">
               Log in
@@ -36,16 +41,16 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Curated playlist</strong>. Add and reorder audio and video items
+            for a clean storefront experience.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Floating widget</strong>. Keep the player visible while customers
+            browse your store.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Flexible media sources</strong>. Support YouTube, TikTok,
+            Instagram, Facebook, and direct MP4/MP3 files.
           </li>
         </ul>
       </div>

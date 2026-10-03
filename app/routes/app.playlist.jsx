@@ -32,6 +32,8 @@ import { UploadIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { getShopPlan, getPlanDetails } from "../billing.server";
+import { PLANS } from "../plans.js";
 import { useState, useCallback, useEffect } from "react";
 
 // ─── GraphQL for Shopify Files upload ────────────────────────────────────────
@@ -120,11 +122,12 @@ async function pollFileReady(admin, fileId) {
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const mediaItems = await prisma.playlistMedia.findMany({
-    where: { shop },
-    orderBy: { sortOrder: "asc" },
-  });
-  return data({ mediaItems, shop });
+  const [mediaItems, planRecord] = await Promise.all([
+    prisma.playlistMedia.findMany({ where: { shop }, orderBy: { sortOrder: "asc" } }),
+    getShopPlan(shop, prisma),
+  ]);
+  const plan = getPlanDetails(planRecord);
+  return data({ mediaItems, shop, planId: plan.id, planLimit: plan.limit, planName: plan.name });
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -138,6 +141,19 @@ export const action = async ({ request }) => {
   try {
     // ── Upload file to Shopify Files ────────────────────────────────────────
     if (intent === "upload") {
+      // Check plan limit before uploading
+      const planRecord = await getShopPlan(shop, prisma);
+      const plan       = getPlanDetails(planRecord);
+      if (plan.limit !== Infinity) {
+        const count = await prisma.playlistMedia.count({ where: { shop } });
+        if (count >= plan.limit) {
+          return data(
+            { success: false, limitReached: true, planId: plan.id, limit: plan.limit },
+            { status: 403 },
+          );
+        }
+      }
+
       const file = formData.get("file");
       if (!file || typeof file === "string")
         return data({ success: false, error: "No file received" }, { status: 400 });
@@ -188,6 +204,18 @@ export const action = async ({ request }) => {
 
     // ── CRUD operations ─────────────────────────────────────────────────────
     if (intent === "create") {
+      // ── Plan limit check ───────────────────────────────────────────────────
+      const planRecord = await getShopPlan(shop, prisma);
+      const plan       = getPlanDetails(planRecord);
+      if (plan.limit !== Infinity) {
+        const count = await prisma.playlistMedia.count({ where: { shop } });
+        if (count >= plan.limit) {
+          return data(
+            { success: false, limitReached: true, planId: plan.id, limit: plan.limit },
+            { status: 403 },
+          );
+        }
+      }
       const maxOrder = await prisma.playlistMedia.aggregate({
         where: { shop },
         _max: { sortOrder: true },
@@ -264,7 +292,7 @@ const EMPTY_FORM = {
 };
 
 const MEDIA_TYPE_OPTIONS = [
-  { label: "Video — YouTube, TikTok, .mp4", value: "video" },
+  { label: "Video — YouTube, TikTok, Instagram, Facebook, .mp4", value: "video" },
   { label: "Audio — .mp3 / .wav / stream URL", value: "audio" },
 ];
 
@@ -280,11 +308,35 @@ const ACCEPTED_EXT = {
   audio: ".mp3  .wav  .ogg",
 };
 
+function SummaryCard({ label, value, tone = "default" }) {
+  const toneMap = {
+    default: "bg-surface-secondary",
+    success: "bg-fill-success-secondary",
+    info: "bg-fill-info-secondary",
+    warning: "bg-fill-warning-secondary",
+  };
+
+  return (
+    <Box
+      background={toneMap[tone] || toneMap.default}
+      borderRadius="200"
+      paddingInline="300"
+      paddingBlock="200"
+    >
+      <InlineStack gap="200" blockAlign="center" wrap={false}>
+        <Text variant="headingMd" as="span" fontWeight="semibold">{value}</Text>
+        <Text variant="bodySm" tone="subdued" as="span">{label}</Text>
+      </InlineStack>
+    </Box>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PlaylistAdmin() {
   // loader data — single source of truth
-  const { mediaItems } = useLoaderData();
+  const { mediaItems, planId, planLimit, planName } = useLoaderData();
+  const atLimit = planLimit !== null && planLimit !== undefined && mediaItems.length >= planLimit;
 
   // One fetcher for CRUD mutations, one dedicated fetcher for file upload
   const crudFetcher   = useFetcher({ key: "playlist-crud" });
@@ -314,7 +366,8 @@ export default function PlaylistAdmin() {
   const isUploading = uploadFetcher.state !== "idle";
   const uploadData  = uploadFetcher.data;
   const uploadDone  = uploadData?.success === true;
-  const uploadError = uploadData?.success === false;
+  const uploadError = uploadData?.success === false && !uploadData?.limitReached;
+  const uploadLimitReached = uploadData?.limitReached === true;
 
   // When upload finishes successfully, store the CDN URL in form.sourceUrl
   useEffect(() => {
@@ -479,41 +532,89 @@ export default function PlaylistAdmin() {
       title="Manage Playlist"
       subtitle={`${mediaItems.length} item${mediaItems.length !== 1 ? "s" : ""} in your playlist`}
       backAction={{ content: "Dashboard", url: "/app" }}
-      primaryAction={
-        <Button variant="primary" onClick={openCreate}>
-          Add media item
-        </Button>
-      }
     >
       <Layout>
-        {/* ── Table / empty state ───────────────────────────────────────── */}
+        {atLimit && (
+          <Layout.Section>
+            <Banner
+              tone="warning"
+              title={`You've reached the ${planName} plan limit (${planLimit} item${planLimit !== 1 ? "s" : ""})`}
+              action={{ content: "Upgrade plan", onAction: () => { window.top.location.href = "/app/billing"; } }}
+            >
+              <Text variant="bodySm">
+                Upgrade to Pro (50 items) or Unlimited to add more media.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        )}
+
         <Layout.Section>
-          {mediaItems.length === 0 ? (
-            <Card>
-              <EmptyState
-                heading="Your playlist is empty"
-                action={{ content: "Add media item", onAction: openCreate }}
-                image={FALLBACK_THUMB}
-              >
+          <Card>
+            <Box padding="300">
+              <InlineStack gap="300" blockAlign="center" wrap={false}>
+                <Text variant="headingSm" as="h2" fontWeight="semibold">Playlist overview</Text>
+                <SummaryCard label="Total" value={mediaItems.length} />
+                <SummaryCard
+                  label="Active"
+                  value={mediaItems.filter((item) => item.isActive).length}
+                  tone="success"
+                />
+                <SummaryCard
+                  label="Video"
+                  value={mediaItems.filter((item) => item.mediaType === "video").length}
+                  tone="warning"
+                />
+                <SummaryCard
+                  label="Audio"
+                  value={mediaItems.filter((item) => item.mediaType === "audio").length}
+                  tone="info"
+                />
+              </InlineStack>
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card padding="0">
+            <Box padding="400">
+              <InlineStack align="space-between" blockAlign="center" gap="300" wrap>
+                <BlockStack gap="050">
+                  <Text variant="headingSm" as="h2" fontWeight="semibold">Media library</Text>
+                  <Text variant="bodySm" tone="subdued">
+                    Manage the content and order shown in your storefront player.
+                  </Text>
+                </BlockStack>
+                <InlineStack gap="300" blockAlign="center">
+                  <Badge tone="info">
+                    {mediaItems.length} {mediaItems.length === 1 ? "item" : "items"}
+                  </Badge>
+                  {atLimit ? (
+                    <Button variant="primary" url="/app/billing">Upgrade to add more</Button>
+                  ) : (
+                    <Button variant="primary" onClick={openCreate}>Add media item</Button>
+                  )}
+                </InlineStack>
+              </InlineStack>
+            </Box>
+            {mediaItems.length === 0 ? (
+              <EmptyState heading="Your playlist is empty" image={FALLBACK_THUMB}>
                 <Text tone="subdued">
                   Upload .mp4 / .mp3 files to Shopify Files, or paste YouTube,
                   TikTok, or direct media URLs.
                 </Text>
               </EmptyState>
-            </Card>
-          ) : (
-            <Card padding="0">
+            ) : (
               <IndexTable
                 resourceName={{ singular: "media item", plural: "media items" }}
                 itemCount={mediaItems.length}
                 selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
                 onSelectionChange={handleSelectionChange}
                 headings={[
-                  { title: "" },
+                  { title: "Preview" },
                   { title: "Title" },
                   { title: "Type" },
                   { title: "Status" },
-                  { title: "Order" },
+                  { title: "Position" },
                   { title: "Actions" },
                 ]}
                 loading={isMutating}
@@ -529,7 +630,7 @@ export default function PlaylistAdmin() {
                       <Thumbnail
                         source={item.thumbnailUrl || FALLBACK_THUMB}
                         alt={item.title}
-                        size="small"
+                        size="medium"
                       />
                     </IndexTable.Cell>
 
@@ -599,12 +700,11 @@ export default function PlaylistAdmin() {
                   </IndexTable.Row>
                 ))}
               </IndexTable>
-            </Card>
-          )}
+            )}
+          </Card>
         </Layout.Section>
 
-        {/* ── Sidebar ───────────────────────────────────────────────────── */}
-        <Layout.Section variant="oneThird">
+        <Layout.Section>
           <BlockStack gap="400">
             <Banner tone="info" title="Playlist order">
               Items appear in the storefront widget in the order listed here.
@@ -616,13 +716,35 @@ export default function PlaylistAdmin() {
                   Supported sources
                 </Text>
                 <Divider />
-                <BlockStack gap="100">
-                  <Text variant="bodySm" fontWeight="medium">Upload directly:</Text>
-                  <Text variant="bodySm" tone="subdued">.mp4, .mov, .webm — stored in Shopify Files</Text>
-                  <Text variant="bodySm" tone="subdued">.mp3, .wav, .ogg — stored in Shopify Files</Text>
-                  <Divider />
-                  <Text variant="bodySm" fontWeight="medium">Or paste a URL:</Text>
-                  <Text variant="bodySm" tone="subdued">YouTube, TikTok, direct .mp4 / .mp3</Text>
+                <BlockStack gap="200">
+                  <Text variant="bodySm" fontWeight="medium">Paste a URL:</Text>
+                  <InlineStack gap="150" wrap>
+                    {["YouTube", "TikTok", "Instagram", "Facebook", ".mp4", ".mp3"].map((s) => (
+                      <Box
+                        key={s}
+                        background="bg-fill-secondary"
+                        borderRadius="200"
+                        paddingInline="200"
+                        paddingBlock="100"
+                      >
+                        <Text variant="bodySm" fontWeight="medium">{s}</Text>
+                      </Box>
+                    ))}
+                  </InlineStack>
+                  <Text variant="bodySm" fontWeight="medium">Or upload a file:</Text>
+                  <InlineStack gap="150" wrap>
+                    {[".mp4", ".mov", ".webm", ".mp3", ".wav", ".ogg"].map((s) => (
+                      <Box
+                        key={s}
+                        background="bg-fill-secondary"
+                        borderRadius="200"
+                        paddingInline="200"
+                        paddingBlock="100"
+                      >
+                        <Text variant="bodySm" fontWeight="medium">{s}</Text>
+                      </Box>
+                    ))}
+                  </InlineStack>
                 </BlockStack>
               </BlockStack>
             </Card>
@@ -642,7 +764,7 @@ export default function PlaylistAdmin() {
           loading: isMutating,
         }}
         secondaryActions={[{ content: "Cancel", onAction: closeModal }]}
-        large
+        size="large"
       >
         {/* Basic fields */}
         <Modal.Section>
@@ -665,7 +787,7 @@ export default function PlaylistAdmin() {
         </Modal.Section>
 
         {/* Source tabs */}
-        <Modal.Section flush>
+        <Modal.Section>
           <Tabs
             tabs={sourceTabs}
             selected={sourceTab}
@@ -694,7 +816,7 @@ export default function PlaylistAdmin() {
                 requiredIndicator
                 helpText={
                   form.mediaType === "video"
-                    ? "YouTube, TikTok, or a direct .mp4 / .mov URL."
+                    ? "YouTube, TikTok, Instagram Reel, Facebook video/reel, or a direct .mp4 / .mov URL."
                     : "A direct .mp3, .wav, or audio stream URL."
                 }
               />
@@ -758,7 +880,7 @@ export default function PlaylistAdmin() {
                             Uploading to Shopify Files…
                           </Text>
                         </InlineStack>
-                        <ProgressBar progress={50} size="small" animated />
+                        <ProgressBar progress={50} size="small" />
                         <Text variant="bodySm" tone="subdued">
                           Large files may take up to 90 seconds to process.
                         </Text>
@@ -788,6 +910,17 @@ export default function PlaylistAdmin() {
                             Try again
                           </Button>
                         </BlockStack>
+                      </Banner>
+                    )}
+
+                    {/* Limit reached */}
+                    {uploadLimitReached && (
+                      <Banner
+                        tone="warning"
+                        title="Plan limit reached"
+                        action={{ content: "Upgrade plan", onAction: () => { window.top.location.href = "/app/billing"; } }}
+                      >
+                        <Text variant="bodySm">You need a higher plan to add more media items.</Text>
                       </Banner>
                     )}
                   </BlockStack>
@@ -860,3 +993,4 @@ export default function PlaylistAdmin() {
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+

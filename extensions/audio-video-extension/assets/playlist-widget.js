@@ -18,12 +18,28 @@
   const STACK_DEPTH     = 3;
   const SWIPE_THRESHOLD = 55;
 
+  // ── Detect Shopify theme editor ────────────────────────────────────────────
+  // window.Shopify.designMode is true when the page is loaded inside the
+  // theme customiser iframe. We skip autoplay and avoid re-init on section
+  // reload events.
+  const IN_EDITOR = !!(window.Shopify && window.Shopify.designMode);
+
   // ── Boot ──────────────────────────────────────────────────────────────────
 
   function boot() {
     const root = document.getElementById('avp-root');
-    if (!root || root._avpInstance) return;
-    root._avpInstance = new AVPWidget(root);
+    if (!root) return;
+
+    // Teardown any existing instance before creating a new one.
+    // This handles the theme editor's section:load event which re-injects
+    // the block HTML but keeps the same JS context — without teardown a
+    // second instance would be created on the re-injected root.
+    if (root._avpInstance) {
+      root._avpInstance._teardown();
+      root._avpInstance = null;
+    }
+
+    root._avpInstance = new AVPWidget(root, { skipAutoplay: IN_EDITOR });
   }
 
   if (document.readyState === 'complete') {
@@ -32,14 +48,25 @@
     window.addEventListener('load', boot);
   }
 
+  // Re-init when the theme editor reloads the section (settings change)
+  document.addEventListener('shopify:section:load', (e) => {
+    if (e.target && e.target.querySelector('#avp-root')) boot();
+  });
+  // Also handle the block-level reload event
+  document.addEventListener('shopify:block:select', () => {
+    const root = document.getElementById('avp-root');
+    if (root && !root._avpInstance) boot();
+  });
+
   // ── Widget class ───────────────────────────────────────────────────────────
 
   class AVPWidget {
-    constructor(root) {
+    constructor(root, opts = {}) {
       this.root        = root;
       this.shop        = (root.dataset.shop || '').trim();
       this.loop        = root.dataset.loop !== 'false';
       this.accentColor = root.dataset.accent || '#667eea';
+      this.skipAutoplay = opts.skipAutoplay || false;
 
       this.playlist       = [];
       this.currentIndex   = -1;
@@ -120,7 +147,19 @@
         const dx = e.changedTouches[0].clientX - startX;
         if (dx < -SWIPE_THRESHOLD) this.playNext();
         else if (dx > SWIPE_THRESHOLD) this.playPrev();
+        else this._flashControls();   // tap without swipe → briefly show controls
       }, { passive: true });
+    }
+
+    // ── Flash controls briefly (for touch devices with no hover) ─────────────
+    _flashControls() {
+      const ctrl = this.root.querySelector('#avp-overlay-controls');
+      if (!ctrl) return;
+      clearTimeout(this._flashTimer);
+      ctrl.classList.add('avp-overlay-controls--visible');
+      this._flashTimer = setTimeout(() => {
+        ctrl.classList.remove('avp-overlay-controls--visible');
+      }, 3000);
     }
 
     // ── Panel toggle ──────────────────────────────────────────────────────────
@@ -147,13 +186,20 @@
     // ── Load playlist then autoplay unmuted ───────────────────────────────────
     async _loadPlaylist() {
       try {
-        const res = await fetch('/apps/playlist/api/media', {
+        const shop = (this.shop || (window.Shopify && window.Shopify.shop) || '').trim();
+        const target = new URL('/apps/playlist/api/media', window.location.origin);
+        if (shop) target.searchParams.set('shop', shop);
+
+        const res = await fetch(target.toString(), {
           headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin',
         });
+
         if (!res.ok) {
           const body = await res.text().catch(() => '');
           throw new Error(`HTTP ${res.status} — ${body.slice(0, 120)}`);
         }
+
         const json = await res.json();
         if (!json.success) throw new Error(json.error || 'API error');
 
@@ -162,8 +208,8 @@
         this._renderTrackList();
         this._setTransportEnabled(this.playlist.length > 0);
 
-        // Always autoplay the first track, unmuted
-        if (this.playlist.length > 0) {
+        // Skip autoplay in the theme editor — just load and show the playlist
+        if (!this.skipAutoplay && this.playlist.length > 0) {
           this.playAt(0);
         }
       } catch (err) {
@@ -184,7 +230,11 @@
 
       // Set initial ratio from the first item before any track plays
       const first = this.playlist[0];
-      const firstIsAudio = first.mediaType === 'audio' && !this._isYouTube(first.sourceUrl) && !this._isTikTok(first.sourceUrl);
+      const firstIsAudio = first.mediaType === 'audio'
+        && !this._isYouTube(first.sourceUrl)
+        && !this._isTikTok(first.sourceUrl)
+        && !this._isFacebook(first.sourceUrl)
+        && !this._isInstagram(first.sourceUrl);
       this.$.stage.style.setProperty('--avp-stage-ratio', firstIsAudio ? '1/1' : '16/9');
 
       this.playlist.forEach((item, idx) => {
@@ -304,8 +354,12 @@
       const item = this.playlist[idx];
 
       // Set stage aspect ratio to match media type BEFORE rendering
-      // video / YouTube / TikTok → 16:9   |   audio → 1:1 (square cover art)
-      const isAudio = item.mediaType === 'audio' && !this._isYouTube(item.sourceUrl) && !this._isTikTok(item.sourceUrl);
+      // video / YouTube / TikTok / Facebook → 16:9  |  audio → 1:1 (square cover art)
+      const isAudio = item.mediaType === 'audio'
+        && !this._isYouTube(item.sourceUrl)
+        && !this._isTikTok(item.sourceUrl)
+        && !this._isFacebook(item.sourceUrl)
+        && !this._isInstagram(item.sourceUrl);
       this.$.stage.style.setProperty('--avp-stage-ratio', isAudio ? '1/1' : '16/9');
 
       this._stackCards();
@@ -328,10 +382,14 @@
       }
 
       try {
-        if      (this._isYouTube(item.sourceUrl)) await this._playYT(item, activeCard);
-        else if (this._isTikTok(item.sourceUrl))  await this._playTikTok(item, activeCard);
-        else if (item.mediaType === 'video')       await this._playVideo(item, activeCard);
-        else                                       await this._playAudio(item);
+        if      (this._isYouTube(item.sourceUrl))   await this._playYT(item, activeCard);
+        else if (this._isTikTok(item.sourceUrl))    await this._playTikTok(item, activeCard);
+        else if (this._isFacebook(item.sourceUrl))  await this._playFacebook(item, activeCard);
+        else if (this._isInstagram(item.sourceUrl)) await this._playInstagram(item, activeCard);
+        else if (item.mediaType === 'video')         await this._playVideo(item, activeCard);
+        else                                         await this._playAudio(item);
+        // briefly show controls when a track starts
+        this._flashControls();
       } catch (err) {
         console.warn('[AVP] playAt error:', err.message);
       }
@@ -400,6 +458,7 @@
     async _playAudio(item) {
       const audio = new Audio();
       audio.preload     = 'auto';
+      audio.volume      = 1;
       audio.muted       = false;    // always start unmuted
       audio.crossOrigin = 'anonymous';
       this.nativeEl     = audio;
@@ -450,8 +509,12 @@
 
       const video = document.createElement('video');
       video.muted       = false;    // always start unmuted
+      video.volume      = 1;
       video.preload     = 'auto';
       video.playsInline = true;
+      video.controls    = false;
+      video.setAttribute('playsinline', 'true');
+      video.setAttribute('webkit-playsinline', 'true');
       video.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000;display:block;';
       this.nativeEl = video;
 
@@ -474,6 +537,7 @@
       }
 
       video.src = item.sourceUrl;
+      video.load();
 
       try {
         await video.play();
@@ -520,7 +584,8 @@
       const divId = `avp-yt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const div   = document.createElement('div');
       div.id      = divId;
-      div.style.cssText = 'width:100%;height:100%;';
+      // pointer-events none so our overlay controls stay clickable over the iframe
+      div.style.cssText = 'width:100%;height:100%;pointer-events:none;';
       (mediaEl || this.$.stage).appendChild(div);
 
       await this._loadYTApi();
@@ -537,13 +602,16 @@
           height: '100%',
           playerVars: {
             autoplay:       1,
-            controls:       1,
-            modestbranding: 1,
-            rel:            0,
+            controls:       0,   // hide YouTube controls
+            modestbranding: 1,   // hide YouTube logo
+            rel:            0,   // no related videos at end
+            showinfo:       0,   // hide title bar
+            iv_load_policy: 3,   // hide video annotations
+            disablekb:      1,   // disable keyboard shortcuts (we handle them)
             playsinline:    1,
             enablejsapi:    1,
             origin:         window.location.origin,
-            mute:           0,   // always start unmuted
+            mute:           0,
           },
           events: {
             onReady: (e) => {
@@ -606,29 +674,148 @@
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
       if (mediaEl) mediaEl.style.display = 'block';
 
-      let embedUrl = '';
-      try {
-        const r = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(item.sourceUrl)}`);
-        const j = await r.json();
-        const m = j.html?.match(/src="([^"]+)"/);
-        if (m) embedUrl = m[1];
-      } catch (_) {}
-
+      const embedUrl = this._tikTokEmbedUrl(item.sourceUrl);
       if (!embedUrl) {
-        const id = this._tikTokId(item.sourceUrl);
-        if (id) embedUrl = `https://www.tiktok.com/embed/v2/${id}`;
+        console.warn('[AVP] Could not build TikTok embed URL for:', item.sourceUrl);
+        return;
       }
-      if (!embedUrl) return;
 
       const iframe = document.createElement('iframe');
-      iframe.src   = embedUrl;
+      iframe.src = embedUrl;
       iframe.allow = 'autoplay; fullscreen';
       iframe.setAttribute('allowfullscreen', '');
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-presentation');
       iframe.style.cssText = 'width:100%;height:100%;border:none;';
       if (mediaEl) { mediaEl.innerHTML = ''; mediaEl.appendChild(iframe); }
       this.tiktokIframe = iframe;
       this._setPlayState(true);
       this._updateProgress(0, 0);
+    }
+
+    // ── Facebook Video / Reel ─────────────────────────────────────────────────
+    /**
+     * Embeds any Facebook video or reel URL using Facebook's official
+     * plugins/video endpoint. Works for:
+     *  - facebook.com/reel/1234567890
+     *  - facebook.com/watch/?v=1234567890
+     *  - facebook.com/video/1234567890
+     *  - fb.watch/XXXXX short links
+     *
+     * Note: Facebook's embed player has its own play button — we show the
+     * iframe and let the customer press play inside it (FB's autoplay is
+     * blocked by most browsers and requires domain registration).
+     */
+    async _playFacebook(item, cardEl) {
+      const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
+      if (mediaEl) mediaEl.style.display = 'block';
+
+      // Facebook's official oembed/plugin iframe — accepts any FB video URL
+      const embedUrl =
+        `https://www.facebook.com/plugins/video.php` +
+        `?href=${encodeURIComponent(item.sourceUrl)}` +
+        `&show_text=false` +
+        `&autoplay=false` +
+        `&mute=false` +
+        `&width=auto`;
+
+      const iframe = document.createElement('iframe');
+      iframe.src   = embedUrl;
+      iframe.allow = 'autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share';
+      iframe.setAttribute('allowfullscreen', '');
+      iframe.setAttribute('scrolling', 'no');
+      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;';
+
+      if (mediaEl) {
+        mediaEl.innerHTML = '';
+        mediaEl.appendChild(iframe);
+      }
+
+      this.tiktokIframe = iframe; // reuse the same teardown handle
+      this._setPlayState(true);
+      this._updateProgress(0, 0);
+    }
+
+    // ── Instagram Reels / Videos ──────────────────────────────────────────────
+    /**
+     * Embeds any Instagram reel or video URL using Instagram's oEmbed iframe.
+     *
+     * Supported formats:
+     *  - instagram.com/reel/SHORTCODE/
+     *  - instagram.com/p/SHORTCODE/
+     *  - instagram.com/tv/SHORTCODE/
+     *
+     * Instagram's embed iframe requires the page to load the Instagram embed.js
+     * script OR uses the direct /embed/ URL. We use the direct embed URL so no
+     * external script injection is needed.
+     *
+     * Note: Instagram restricts embeds to domains registered in Meta for
+     * Developers. On unregistered domains the iframe shows a login prompt.
+     * This is a Meta platform limitation — not something the app can bypass.
+     */
+    async _playInstagram(item, cardEl) {
+      const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
+      if (mediaEl) mediaEl.style.display = 'block';
+
+      // Extract the shortcode from any Instagram reel/post/tv URL
+      const shortcode = this._igShortcode(item.sourceUrl);
+      if (!shortcode) {
+        console.warn('[AVP] Could not parse Instagram shortcode from:', item.sourceUrl);
+        return;
+      }
+
+      // Direct embed URL — works without the Instagram JS SDK
+      const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
+
+      const iframe = document.createElement('iframe');
+      iframe.src   = embedUrl;
+      iframe.allow = 'autoplay; fullscreen; picture-in-picture';
+      iframe.setAttribute('allowfullscreen', '');
+      iframe.setAttribute('scrolling', 'no');
+      // Instagram embeds are designed for a 400px+ width; scale to fit our panel
+      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;';
+
+      if (mediaEl) {
+        mediaEl.innerHTML = '';
+        mediaEl.appendChild(iframe);
+      }
+
+      this.tiktokIframe = iframe; // reuse the same teardown handle
+      this._setPlayState(true);
+      this._updateProgress(0, 0);
+    }
+
+    /** Extract the shortcode from any Instagram URL variant */
+    _igShortcode(url) {
+      // Matches /reel/CODE, /p/CODE, /tv/CODE — with or without trailing slash
+      const m = url.match(/instagram\.com\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)/i);
+      return m ? m[1] : null;
+    }
+
+    /** Build a TikTok embed URL that handles ALL URL formats:
+     *  - Short links:  tiktok.com/t/XXXXXXX
+     *  - Long links:   tiktok.com/@user/video/1234567890
+     *  - vm links:     vm.tiktok.com/XXXXXXX
+     *
+     *  TikTok's /embed/v2 endpoint accepts the full original URL as a ?url= param,
+     *  which means it handles redirects itself — no browser-side resolution needed.
+     */
+    _tikTokEmbedUrl(url) {
+      if (!url) return null;
+      const clean = url.trim();
+
+      // Try to extract a numeric video ID first (long-form URL)
+      const idMatch = clean.match(/\/video\/(\d{10,})/);
+      if (idMatch) {
+        return `https://www.tiktok.com/embed/v2/${idMatch[1]}`;
+      }
+
+      // For short links (tiktok.com/t/XXX) and vm.tiktok.com/XXX:
+      // Pass the full URL to TikTok's embed endpoint — it resolves the redirect itself
+      if (/tiktok\.com/i.test(clean)) {
+        return `https://www.tiktok.com/embed/v2?url=${encodeURIComponent(clean)}&referrer=${encodeURIComponent(window.location.origin)}`;
+      }
+
+      return null;
     }
 
     // ── Progress ──────────────────────────────────────────────────────────────
@@ -725,8 +912,10 @@
     _hideEmpty() { this.$.empty.style.display = 'none'; }
 
     // ── URL helpers ───────────────────────────────────────────────────────────
-    _isYouTube(url) { return /youtube\.com|youtu\.be/i.test(url); }
-    _isTikTok(url)  { return /tiktok\.com/i.test(url); }
+    _isYouTube(url)   { return /youtube\.com|youtu\.be/i.test(url); }
+    _isTikTok(url)    { return /tiktok\.com/i.test(url); }
+    _isFacebook(url)  { return /facebook\.com|fb\.watch/i.test(url); }
+    _isInstagram(url) { return /instagram\.com/i.test(url); }
 
     _ytId(url) {
       const m = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -734,6 +923,7 @@
     }
 
     _tikTokId(url) {
+      // Legacy — kept for reference. Use _tikTokEmbedUrl() instead.
       const m = url.match(/\/video\/(\d+)/);
       return m ? m[1] : null;
     }

@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider, Frame } from "@shopify/polaris";
@@ -13,18 +13,19 @@ export const loader = async ({ request }) => {
 
 export default function App() {
   const { apiKey } = useLoaderData();
-
   return (
     <ShopifyAppProvider embedded apiKey={apiKey}>
       <PolarisAppProvider i18n={enTranslations}>
-        {/*
-          Frame is required by Polaris Toast, Loading, and ContextualSaveBar.
-          One Frame per app — lives here in the layout so all child routes share it.
-        */}
         <Frame>
+          {/*
+            s-app-nav: App Bridge component for the Shopify admin sidebar nav.
+            rel="home" hides the link from the menu and sets it as the home route.
+            Labels should be 1-2 words, noun-based per Shopify guidelines.
+          */}
           <s-app-nav>
-            <s-link href="/app">Dashboard</s-link>
+            <s-link href="/app" rel="home">Dashboard</s-link>
             <s-link href="/app/playlist">Manage Playlist</s-link>
+            <s-link href="/app/billing">Plans & Billing</s-link>
             <s-link href="/app/settings">Settings</s-link>
           </s-app-nav>
           <Outlet />
