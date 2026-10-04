@@ -254,9 +254,10 @@ function readMediaId(formData) {
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
+  const pricingReturn = new URL(request.url).searchParams.has("plan_handle");
   const [mediaItems, planStatus] = await Promise.all([
     prisma.playlistMedia.findMany({ where: { shop }, orderBy: { sortOrder: "asc" } }),
-    getShopPlanStatus(shop, prisma, admin),
+    getShopPlanStatus(shop, prisma, admin, { forceRefresh: pricingReturn }),
   ]);
   const plan = getPlanDetails(planStatus.record);
   return data({
@@ -266,6 +267,7 @@ export const loader = async ({ request }) => {
     planLimit: plan.limit,
     planName: plan.name,
     billingVerified: planStatus.verified,
+    billingStatusReason: planStatus.reason,
   });
 };
 
@@ -487,7 +489,13 @@ function SummaryCard({ label, value, tone = "default" }) {
 
 export default function PlaylistAdmin() {
   // loader data — single source of truth
-  const { mediaItems, planLimit, planName, billingVerified } = useLoaderData();
+  const {
+    mediaItems,
+    planLimit,
+    planName,
+    billingVerified,
+    billingStatusReason,
+  } = useLoaderData();
   const atLimit = planLimit !== null && planLimit !== undefined && mediaItems.length >= planLimit;
 
   // One fetcher for CRUD mutations, one dedicated fetcher for file upload
@@ -716,8 +724,8 @@ export default function PlaylistAdmin() {
               action={{ content: "Review billing setup", url: "/app/billing" }}
             >
               <Text variant="bodySm">
-                The playlist is available with Free limits because Shopify could not verify the current plan.
-                Review billing setup or Partner API availability.
+                {billingStatusReason} The playlist uses temporary Free limits until Shopify
+                subscription verification succeeds.
               </Text>
             </Banner>
           </Layout.Section>
@@ -727,8 +735,15 @@ export default function PlaylistAdmin() {
           <Layout.Section>
             <Banner
               tone="warning"
-              title={`You've reached the ${planName} plan limit (${planLimit} item${planLimit !== 1 ? "s" : ""})`}
-              action={{ content: "Upgrade plan", url: "/app/billing" }}
+              title={
+                billingVerified
+                  ? `You've reached the ${planName} plan limit (${planLimit} item${planLimit !== 1 ? "s" : ""})`
+                  : `Temporary Free limit reached (${planLimit} item${planLimit !== 1 ? "s" : ""})`
+              }
+              action={{
+                content: billingVerified ? "Upgrade plan" : "Retry billing verification",
+                url: "/app/billing?pricing=unverified",
+              }}
             >
               <Text variant="bodySm">
                 Upgrade to Pro (50 items) or Unlimited to add more media.

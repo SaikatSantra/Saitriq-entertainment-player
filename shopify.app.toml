@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "f44b80a06cf9296325c18eca3c544299"
+client_id = "4a97c4086300f487693d3860b6ec0dc8"
 name = "Audio and Video Playlist"
 application_url = "https://saitriq-entertainment-player.vercel.app"
 embedded = true

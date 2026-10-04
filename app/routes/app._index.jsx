@@ -14,6 +14,9 @@ import { getShopPlanStatus, getPlanDetails } from "../billing.server";
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const pricingReturnPlanHandle = url.searchParams.get("plan_handle");
+  const pricingReturn = Boolean(pricingReturnPlanHandle);
 
   const [mediaSummary, widgetSetting, planStatus, recentItems] = await Promise.all([
     prisma.playlistMedia.groupBy({
@@ -25,7 +28,7 @@ export const loader = async ({ request }) => {
       where: { shop_key: { shop, key: "widget_enabled" } },
       select: { value: true },
     }),
-    getShopPlanStatus(shop, prisma, admin),
+    getShopPlanStatus(shop, prisma, admin, { forceRefresh: pricingReturn }),
     prisma.playlistMedia.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
@@ -51,6 +54,8 @@ export const loader = async ({ request }) => {
     widgetEnabled,
     recentItems,
     billingVerified: planStatus.verified,
+    billingStatusReason: planStatus.reason,
+    pricingReturnPlanHandle,
     // Infinity → null for JSON serialisation; component handles null as "unlimited"
     plan: { id: plan.id, name: plan.name, price: plan.price, limit: plan.limit === Infinity ? null : plan.limit },
   });
@@ -101,7 +106,16 @@ function Step({ number, title, description, action }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { shop, stats, widgetEnabled, recentItems, plan, billingVerified } = useLoaderData();
+  const {
+    shop,
+    stats,
+    widgetEnabled,
+    recentItems,
+    plan,
+    billingVerified,
+    billingStatusReason,
+    pricingReturnPlanHandle,
+  } = useLoaderData();
   const hasItems = stats.totalMedia > 0;
   // plan.limit is null for UNLIMITED (serialised from Infinity); null = no cap
   const atLimit  = plan.limit !== null && stats.totalMedia >= plan.limit;
@@ -147,8 +161,11 @@ export default function Dashboard() {
               action={{ content: "Review billing setup", url: "/app/billing" }}
             >
               <Text variant="bodySm">
-                The app is enforcing Free limits because Shopify could not verify the current plan.
-                Review billing setup or Partner API availability.
+                {billingStatusReason} The app applies temporary Free limits until it can verify
+                the Shopify subscription.
+                {pricingReturnPlanHandle && (
+                  <> Shopify returned plan handle <code>{pricingReturnPlanHandle}</code>; this is not yet verified.</>
+                )}
               </Text>
             </Banner>
           </Layout.Section>
@@ -159,8 +176,15 @@ export default function Dashboard() {
           <Layout.Section>
             <Banner
               tone="warning"
-              title={`You've reached the ${plan.name} plan limit of ${plan.limit} item${plan.limit !== 1 ? "s" : ""}`}
-              action={{ content: "Upgrade plan", url: "/app/billing" }}
+              title={
+                billingVerified
+                  ? `You've reached the ${plan.name} plan limit of ${plan.limit} item${plan.limit !== 1 ? "s" : ""}`
+                  : `Temporary Free limit reached (${plan.limit} item${plan.limit !== 1 ? "s" : ""})`
+              }
+              action={{
+                content: billingVerified ? "Upgrade plan" : "Retry billing verification",
+                url: "/app/billing?pricing=unverified",
+              }}
             >
               <Text variant="bodySm">
                 Upgrade to Pro ($5/mo, 50 items) or Unlimited ($50/mo) to keep adding media.
@@ -262,8 +286,8 @@ export default function Dashboard() {
               <BlockStack gap="300">
                 <InlineStack align="space-between" blockAlign="center">
                   <Text variant="headingSm" fontWeight="semibold">Current plan</Text>
-                  <Badge tone={plan.id === "FREE" ? "info" : plan.id === "PRO" ? "warning" : "success"}>
-                    {plan.name}
+                  <Badge tone={!billingVerified ? "attention" : plan.id === "FREE" ? "info" : plan.id === "PRO" ? "warning" : "success"}>
+                    {billingVerified ? plan.name : "Unverified"}
                   </Badge>
                 </InlineStack>
                 <Divider />
@@ -272,12 +296,13 @@ export default function Dashboard() {
                     <Text variant="bodySm" tone="subdued">Media items used</Text>
                     <Text variant="bodySm" fontWeight="medium">
                       {stats.totalMedia} / {plan.limit === null ? "∞" : plan.limit}
+                      {!billingVerified && " (temporary Free limit)"}
                     </Text>
                   </InlineStack>
                   <InlineStack align="space-between">
                     <Text variant="bodySm" tone="subdued">Price</Text>
                     <Text variant="bodySm" fontWeight="medium">
-                      {plan.price === 0 ? "Free" : `$${plan.price}/mo`}
+                      {!billingVerified ? "Not verified" : plan.price === 0 ? "Free" : `$${plan.price}/mo`}
                     </Text>
                   </InlineStack>
                 </BlockStack>

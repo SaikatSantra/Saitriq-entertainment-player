@@ -489,7 +489,9 @@
       this.nativeEl     = audio;
 
       audio.addEventListener('timeupdate', () => this._tickNative());
-      audio.addEventListener('ended',      () => this.playNext());
+      audio.addEventListener('ended',      () => {
+        if (this.nativeEl === audio) this.playNext();
+      });
       audio.addEventListener('play',       () => this._setPlayState(true));
       audio.addEventListener('pause',      () => this._setPlayState(false));
       audio.addEventListener('error',      (e) => console.warn('[AVP] audio error', e));
@@ -543,7 +545,9 @@
       this.nativeEl = video;
 
       video.addEventListener('timeupdate', () => this._tickNative());
-      video.addEventListener('ended',      () => this.playNext());
+      video.addEventListener('ended',      () => {
+        if (this.nativeEl === video) this.playNext();
+      });
       video.addEventListener('play',       () => this._setPlayState(true));
       video.addEventListener('pause',      () => this._setPlayState(false));
       video.addEventListener('error',      (e) => console.warn('[AVP] video error', e));
@@ -655,7 +659,8 @@
               this._startYTProgress();
               resolve();
             },
-            onStateChange: ({ data }) => {
+            onStateChange: ({ data, target }) => {
+              if (target !== this.ytPlayer) return;
               if      (data === YT.PlayerState.PLAYING) { this._setPlayState(true);  this._startYTProgress(); }
               else if (data === YT.PlayerState.PAUSED)  { this._setPlayState(false); this._stopProgress(); }
               else if (data === YT.PlayerState.ENDED)   { this._setPlayState(false); this._stopProgress(); this.playNext(); }

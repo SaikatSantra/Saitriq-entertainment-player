@@ -23,13 +23,16 @@ import { useState, useEffect } from "react";
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const shop   = session.shop;
+  const url = new URL(request.url);
+  const pricingReturn =
+    url.searchParams.has("plan_handle") ||
+    ["updated", "unverified"].includes(url.searchParams.get("pricing"));
   const identity = await getAppShopIdentity(admin);
   const [planStatus, pricingPageUrl] = await Promise.all([
-    getShopPlanStatus(shop, prisma, admin, { identity }),
+    getShopPlanStatus(shop, prisma, admin, { identity, forceRefresh: pricingReturn }),
     getPricingPageUrl(admin, shop, identity),
   ]);
   const plan   = getPlanDetails(planStatus.record);
-  const url = new URL(request.url);
   // Serialise plans as plain objects (Infinity → null for JSON)
   const plans  = Object.values(PLANS).map((p) => ({
     ...p,
