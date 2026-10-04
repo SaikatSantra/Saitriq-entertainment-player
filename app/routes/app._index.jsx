@@ -160,7 +160,7 @@ export default function Dashboard() {
             <Banner
               tone="warning"
               title={`You've reached the ${plan.name} plan limit of ${plan.limit} item${plan.limit !== 1 ? "s" : ""}`}
-              action={{ content: "Upgrade plan", onAction: () => { window.top.location.href = "/app/billing"; } }}
+              action={{ content: "Upgrade plan", url: "/app/billing" }}
             >
               <Text variant="bodySm">
                 Upgrade to Pro ($5/mo, 50 items) or Unlimited ($50/mo) to keep adding media.

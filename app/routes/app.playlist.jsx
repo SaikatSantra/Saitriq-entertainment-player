@@ -713,7 +713,7 @@ export default function PlaylistAdmin() {
             <Banner
               tone="warning"
               title="Subscription status is not verified"
-              action={{ content: "Review billing setup", onAction: () => { window.top.location.href = "/app/billing"; } }}
+              action={{ content: "Review billing setup", url: "/app/billing" }}
             >
               <Text variant="bodySm">
                 The playlist is available with Free limits because Shopify could not verify the current plan.
@@ -728,7 +728,7 @@ export default function PlaylistAdmin() {
             <Banner
               tone="warning"
               title={`You've reached the ${planName} plan limit (${planLimit} item${planLimit !== 1 ? "s" : ""})`}
-              action={{ content: "Upgrade plan", onAction: () => { window.top.location.href = "/app/billing"; } }}
+              action={{ content: "Upgrade plan", url: "/app/billing" }}
             >
               <Text variant="bodySm">
                 Upgrade to Pro (50 items) or Unlimited to add more media.
@@ -1107,7 +1107,7 @@ export default function PlaylistAdmin() {
                       <Banner
                         tone="warning"
                         title="Plan limit reached"
-                        action={{ content: "Upgrade plan", onAction: () => { window.top.location.href = "/app/billing"; } }}
+                        action={{ content: "Upgrade plan", url: "/app/billing" }}
                       >
                         <Text variant="bodySm">You need a higher plan to add more media items.</Text>
                       </Banner>

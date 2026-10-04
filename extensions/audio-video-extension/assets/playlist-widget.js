@@ -251,13 +251,10 @@
       this._hideEmpty();
 
       // Set initial ratio from the first item before any track plays
-      const first = this.playlist[0];
-      const firstIsAudio = first.mediaType === 'audio'
-        && !this._isYouTube(first.sourceUrl)
-        && !this._isTikTok(first.sourceUrl)
-        && !this._isFacebook(first.sourceUrl)
-        && !this._isInstagram(first.sourceUrl);
-      this.$.stage.style.setProperty('--avp-stage-ratio', firstIsAudio ? '1/1' : '16/9');
+      this.$.stage.style.setProperty(
+        '--avp-stage-ratio',
+        this._stageRatioForItem(this.playlist[0]),
+      );
 
       this.playlist.forEach((item, idx) => {
         this.$.stage.appendChild(this._makeCard(item, idx));
@@ -385,14 +382,11 @@
         || this._isInstagram(item.sourceUrl);
       this.root.classList.toggle('avp-root--provider-player', usesProviderControls);
 
-      // Set stage aspect ratio to match media type BEFORE rendering
-      // video / YouTube / TikTok / Facebook â†’ 16:9  |  audio â†’ 1:1 (square cover art)
-      const isAudio = item.mediaType === 'audio'
-        && !this._isYouTube(item.sourceUrl)
-        && !this._isTikTok(item.sourceUrl)
-        && !this._isFacebook(item.sourceUrl)
-        && !this._isInstagram(item.sourceUrl);
-      this.$.stage.style.setProperty('--avp-stage-ratio', isAudio ? '1/1' : '16/9');
+      // Use a platform-appropriate default; direct video files refine it from metadata.
+      this.$.stage.style.setProperty(
+        '--avp-stage-ratio',
+        this._stageRatioForItem(item),
+      );
 
       this._stackCards();
       this._highlightTrack();
@@ -556,7 +550,11 @@
 
       // Detect real dimensions and apply exact aspect ratio to the stage
       video.addEventListener('loadedmetadata', () => {
-        if (video.videoWidth && video.videoHeight) {
+        if (
+          this.nativeEl === video &&
+          video.videoWidth &&
+          video.videoHeight
+        ) {
           this.$.stage.style.setProperty('--avp-stage-ratio', `${video.videoWidth}/${video.videoHeight}`);
         }
       }, { once: true });
@@ -944,6 +942,27 @@
     _hideEmpty() { this.$.empty.style.display = 'none'; }
 
     // â”€â”€ URL helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    _stageRatioForItem(item) {
+      const url = item.sourceUrl;
+      if (
+        item.mediaType === 'audio' &&
+        !this._isYouTube(url) &&
+        !this._isTikTok(url) &&
+        !this._isFacebook(url) &&
+        !this._isInstagram(url)
+      ) {
+        return '1/1';
+      }
+      if (
+        this._isTikTok(url) ||
+        (this._isInstagram(url) && /\/reel\//i.test(url)) ||
+        (this._isFacebook(url) && /\/reel\//i.test(url))
+      ) {
+        return '9/16';
+      }
+      return '16/9';
+    }
+
     _isYouTube(url)   { return /youtube\.com|youtu\.be/i.test(url); }
     _isTikTok(url)    { return /tiktok\.com/i.test(url); }
     _isFacebook(url)  { return /facebook\.com|fb\.watch/i.test(url); }

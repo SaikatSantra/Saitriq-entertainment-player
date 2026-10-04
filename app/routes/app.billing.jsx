@@ -2,7 +2,7 @@
  * /app/billing — Plan selection page
  */
 
-import { useLoaderData, useFetcher, data } from "react-router";
+import { useLoaderData, data } from "react-router";
 import {
   Page, Layout, Card, Text, Button, BlockStack, InlineStack,
   Divider, Badge, Banner, List, Toast, Box,
@@ -11,7 +11,11 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { PLANS, getPlanDetails } from "../plans.js";
-import { getShopPlanStatus, getPricingPageUrl } from "../billing.server";
+import {
+  getAppShopIdentity,
+  getShopPlanStatus,
+  getPricingPageUrl,
+} from "../billing.server";
 import { useState, useEffect } from "react";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -19,7 +23,11 @@ import { useState, useEffect } from "react";
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const shop   = session.shop;
-  const planStatus = await getShopPlanStatus(shop, prisma, admin);
+  const identity = await getAppShopIdentity(admin);
+  const [planStatus, pricingPageUrl] = await Promise.all([
+    getShopPlanStatus(shop, prisma, admin, { identity }),
+    getPricingPageUrl(admin, shop, identity),
+  ]);
   const plan   = getPlanDetails(planStatus.record);
   const url = new URL(request.url);
   // Serialise plans as plain objects (Infinity → null for JSON)
@@ -30,6 +38,8 @@ export const loader = async ({ request }) => {
   return data({
     currentPlanId: planStatus.verified ? plan.id : null,
     billingVerified: planStatus.verified,
+    billingStatusReason: planStatus.reason,
+    pricingPageUrl,
     plans,
     shop,
     pricingUpdated: url.searchParams.get("pricing") === "updated",
@@ -37,29 +47,9 @@ export const loader = async ({ request }) => {
   });
 };
 
-// ─── Action ───────────────────────────────────────────────────────────────────
-
-export const action = async ({ request }) => {
-  const { session, admin, redirect: shopifyRedirect } = await authenticate.admin(request);
-  const shop = session.shop;
-  const fd     = await request.formData();
-  const intent = fd.get("intent");
-  const planId = fd.get("planId");
-
-  if (intent === "upgrade") {
-    if (typeof planId !== "string" || !Object.hasOwn(PLANS, planId)) {
-      return data({ success: false, error: "Choose a valid plan." }, { status: 400 });
-    }
-    const pricingPageUrl = await getPricingPageUrl(admin, shop);
-    return shopifyRedirect(pricingPageUrl, { target: "_top" });
-  }
-
-  return data({ success: false, error: "Unknown intent" });
-};
-
 // ─── Plan card ────────────────────────────────────────────────────────────────
 
-function PlanCard({ plan, isCurrent, onSelect, loading }) {
+function PlanCard({ plan, isCurrent, pricingPageUrl }) {
   const isFree = plan.price === 0;
 
   return (
@@ -104,11 +94,11 @@ function PlanCard({ plan, isCurrent, onSelect, loading }) {
           ) : (
             <Button
               variant={plan.price > 0 ? "primary" : "secondary"}
-              onClick={() => onSelect(plan.id)}
-              loading={loading}
+              url={pricingPageUrl}
+              target="_top"
               fullWidth
             >
-              {isFree ? "Downgrade to Free" : `Upgrade to ${plan.name}`}
+              View plans on Shopify
             </Button>
           )}
         </BlockStack>
@@ -120,13 +110,19 @@ function PlanCard({ plan, isCurrent, onSelect, loading }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  const { currentPlanId, billingVerified, plans, pricingUpdated, pricingError } = useLoaderData();
-  const fetcher = useFetcher();
+  const {
+    currentPlanId,
+    billingVerified,
+    billingStatusReason,
+    pricingPageUrl,
+    plans,
+    pricingUpdated,
+    pricingError,
+  } = useLoaderData();
 
   const [toastActive,  setToastActive]  = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [toastError,   setToastError]   = useState(false);
-  const [loadingPlan,  setLoadingPlan]  = useState(null);
 
   useEffect(() => {
     if (pricingUpdated) {
@@ -139,25 +135,6 @@ export default function BillingPage() {
       setToastActive(true);
     }
   }, [pricingUpdated, pricingError]);
-
-  useEffect(() => {
-    if (fetcher.state !== "idle") return;
-    // fetcher just became idle — check the result
-    if (fetcher.data?.error) {
-      setToastMessage(fetcher.data.error);
-      setToastError(true);
-      setToastActive(true);
-    }
-    setLoadingPlan(null);
-  }, [fetcher.state, fetcher.data]);
-
-  const handleSelect = (planId) => {
-    setLoadingPlan(planId);
-    const fd = new FormData();
-    fd.append("intent", "upgrade");
-    fd.append("planId", planId);
-    fetcher.submit(fd, { method: "POST" });
-  };
 
   return (
     <Page
@@ -179,11 +156,14 @@ export default function BillingPage() {
           <Layout.Section>
             <Banner tone="warning" title="Subscription status is not verified">
               <Text as="span" variant="bodyMd">
-                Plan changes still happen on Shopify’s hosted pricing page, but this app
-                cannot confirm the selected plan. Check that the Partner API client has
-                Manage apps permission and that its credentials are available; until then,
-                Free limits are applied.
+                {billingStatusReason} Until verification is restored, Free limits are applied.
+                You can still use the buttons below to manage your plan on Shopify.
               </Text>
+              <Box paddingBlockStart="200">
+                <Button url={pricingPageUrl} target="_top" variant="secondary">
+                  Open Shopify plan selection
+                </Button>
+              </Box>
             </Banner>
           </Layout.Section>
         )}
@@ -201,8 +181,7 @@ export default function BillingPage() {
                 <PlanCard
                   plan={plan}
                   isCurrent={currentPlanId === plan.id}
-                  onSelect={handleSelect}
-                  loading={loadingPlan === plan.id && fetcher.state !== "idle"}
+                  pricingPageUrl={pricingPageUrl}
                 />
               </Box>
             ))}

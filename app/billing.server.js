@@ -29,9 +29,14 @@ const ACTIVE_SUBSCRIPTION_QUERY = `#graphql
 `;
 
 const PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+const planCache = new Map();
+const planRefreshes = new Map();
 
 export class PartnerApiConfigurationError extends Error {
-  constructor(message = "Shopify App Pricing subscription configuration is incomplete.") {
+  constructor(
+    message =
+      "Subscription status cannot be verified: set SHOPIFY_PARTNER_ORG_ID and SHOPIFY_PARTNER_API_ACCESS_TOKEN using a Partner API client with Manage apps permission.",
+  ) {
     super(message);
     this.name = "PartnerApiConfigurationError";
   }
@@ -76,7 +81,7 @@ function getPlanItemHandleMap() {
   return map;
 }
 
-async function getActivePricingSubscription(admin) {
+async function getActivePricingSubscription(admin, identity) {
   const organizationId =
     process.env.SHOPIFY_PARTNER_ORG_ID ??
     process.env.SHOPIFY_PARTNER_ORGANIZATION_ID;
@@ -89,16 +94,9 @@ async function getActivePricingSubscription(admin) {
     );
   }
 
-  const identityResponse = await admin.graphql(IDENTITY_QUERY);
-  const identityJson = await identityResponse.json();
-  if (identityJson.errors?.length) {
-    throw new Error(identityJson.errors.map(({ message }) => message).join(", "));
-  }
-  const appId = process.env.SHOPIFY_APP_GID || identityJson.data?.app?.id;
-  const shopId = identityJson.data?.shop?.id;
-  if (!appId || !identityJson.data?.app?.handle || !shopId) {
-    throw new Error("Shopify did not return the app and shop identity required for billing.");
-  }
+  const appShopIdentity = identity ?? (await getAppShopIdentity(admin));
+  const appId = process.env.SHOPIFY_APP_GID || appShopIdentity.appId;
+  const shopId = appShopIdentity.shopId;
 
   const endpoint =
     `https://partners.shopify.com/${encodeURIComponent(organizationId)}` +
@@ -142,6 +140,24 @@ async function getActivePricingSubscription(admin) {
   return payload.data.activeSubscription;
 }
 
+export async function getAppShopIdentity(admin) {
+  const response = await admin.graphql(IDENTITY_QUERY);
+  const payload = await response.json();
+  if (payload.errors?.length) {
+    throw new Error(payload.errors.map(({ message }) => message).join(", "));
+  }
+
+  const identity = {
+    appId: payload.data?.app?.id,
+    appHandle: payload.data?.app?.handle,
+    shopId: payload.data?.shop?.id,
+  };
+  if (!identity.appId || !identity.appHandle || !identity.shopId) {
+    throw new Error("Shopify did not return the app and shop identity required for billing.");
+  }
+  return identity;
+}
+
 function resolvePlanId(subscription) {
   if (!subscription) return "FREE";
   const handleMap = getPlanItemHandleMap();
@@ -170,7 +186,12 @@ function resolvePlanId(subscription) {
  * Refresh the local entitlement from Shopify's canonical managed subscription.
  * A missing active subscription is the Free plan; API errors are surfaced.
  */
-export async function getShopPlan(shop, prisma, admin, { forceRefresh = false } = {}) {
+export async function getShopPlan(
+  shop,
+  prisma,
+  admin,
+  { forceRefresh = false, identity } = {},
+) {
   if (!admin) {
     throw new Error("An authenticated Shopify Admin API client is required to refresh billing.");
   }
@@ -182,6 +203,34 @@ export async function getShopPlan(shop, prisma, admin, { forceRefresh = false } 
     throw new PartnerApiConfigurationError();
   }
 
+  const now = Date.now();
+  const inMemory = planCache.get(shop);
+  if (!forceRefresh && inMemory && now - inMemory.cachedAt < PLAN_CACHE_TTL_MS) {
+    return inMemory.record;
+  }
+
+  if (!forceRefresh && planRefreshes.has(shop)) {
+    return planRefreshes.get(shop);
+  }
+
+  const refreshPromise = refreshShopPlan(shop, prisma, admin, { forceRefresh, identity });
+  planRefreshes.set(shop, refreshPromise);
+  try {
+    const record = await refreshPromise;
+    planCache.set(shop, { record, cachedAt: Date.now() });
+    if (planCache.size > 500) {
+      const oldestShop = planCache.keys().next().value;
+      if (oldestShop) planCache.delete(oldestShop);
+    }
+    return record;
+  } finally {
+    if (planRefreshes.get(shop) === refreshPromise) {
+      planRefreshes.delete(shop);
+    }
+  }
+}
+
+async function refreshShopPlan(shop, prisma, admin, { forceRefresh, identity }) {
   const cachedRecord = await prisma.appSubscription.findUnique({ where: { shop } });
   if (
     !forceRefresh &&
@@ -191,7 +240,7 @@ export async function getShopPlan(shop, prisma, admin, { forceRefresh = false } 
     return cachedRecord;
   }
 
-  const subscription = await getActivePricingSubscription(admin);
+  const subscription = await getActivePricingSubscription(admin, identity);
   const planId = resolvePlanId(subscription);
   const shopifySubscriptionId = subscription?.legacySubscriptionId ?? null;
 
@@ -202,15 +251,19 @@ export async function getShopPlan(shop, prisma, admin, { forceRefresh = false } 
   });
 }
 
-export async function getShopPlanStatus(shop, prisma, admin) {
+export async function getShopPlanStatus(shop, prisma, admin, options) {
   try {
-    return { record: await getShopPlan(shop, prisma, admin), verified: true };
+    return {
+      record: await getShopPlan(shop, prisma, admin, options),
+      verified: true,
+      reason: null,
+    };
   } catch (error) {
     if (
       error instanceof PartnerApiConfigurationError ||
       error instanceof PartnerApiVerificationError
     ) {
-      return { record: null, verified: false };
+      return { record: null, verified: false, reason: error.message };
     }
     throw error;
   }
@@ -226,15 +279,8 @@ export async function canAddItem(shop, prisma, admin) {
 }
 
 /** Construct Shopify's hosted managed-pricing page URL. */
-export async function getPricingPageUrl(admin, shop) {
-  const identityResponse = await admin.graphql(IDENTITY_QUERY);
-  const identityJson = await identityResponse.json();
-  if (identityJson.errors?.length) {
-    throw new Error(identityJson.errors.map(({ message }) => message).join(", "));
-  }
-
-  const appHandle = identityJson.data?.app?.handle;
-  if (!appHandle) throw new Error("Shopify did not return this app's handle.");
+export async function getPricingPageUrl(admin, shop, identity) {
+  const { appHandle } = identity ?? (await getAppShopIdentity(admin));
 
   const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
   if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(storeHandle)) {

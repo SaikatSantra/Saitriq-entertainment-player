@@ -13,8 +13,6 @@ import {
   Toast,
   Select,
   TextField,
-  SettingToggle,
-  Box,
 } from "@shopify/polaris";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -137,26 +135,28 @@ export default function SettingsPage() {
           <BlockStack gap="400">
 
             {/* ── Widget on/off ────────────────────────────────────────── */}
-            <SettingToggle
-              action={{
-                content: widgetEnabled ? "Disable widget" : "Enable widget",
-                onAction: () =>
-                  update("widget_enabled", widgetEnabled ? "false" : "true"),
-                tone: widgetEnabled ? "critical" : undefined,
-              }}
-              enabled={widgetEnabled}
-            >
-              <Text variant="headingSm" fontWeight="semibold" as="h3">
-                Storefront widget
-              </Text>
-              <Box paddingBlockStart="100">
-                <Text variant="bodySm" tone="subdued">
-                  {widgetEnabled
-                    ? "The floating playlist widget is currently visible on your storefront."
-                    : "The widget is hidden. Enable it to show the playlist on your storefront."}
-                </Text>
-              </Box>
-            </SettingToggle>
+            <Card>
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <Text variant="headingSm" fontWeight="semibold" as="h3">
+                    Storefront widget
+                  </Text>
+                  <Text variant="bodySm" tone="subdued">
+                    {widgetEnabled
+                      ? "The floating playlist widget is currently visible on your storefront."
+                      : "The widget is hidden. Enable it to show the playlist on your storefront."}
+                  </Text>
+                </BlockStack>
+                <Button
+                  variant={widgetEnabled ? "secondary" : "primary"}
+                  onClick={() =>
+                    update("widget_enabled", widgetEnabled ? "false" : "true")
+                  }
+                >
+                  {widgetEnabled ? "Disable widget" : "Enable widget"}
+                </Button>
+              </InlineStack>
+            </Card>
 
             {/* ── Appearance ───────────────────────────────────────────── */}
             <Card>
