@@ -7,15 +7,15 @@ import { QuestionCircleIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getShopPlan, getPlanDetails } from "../billing.server";
+import { getShopPlanStatus, getPlanDetails } from "../billing.server";
 
 // ─── Loader — single round-trip ───────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [mediaSummary, widgetSetting, planRecord, recentItems] = await Promise.all([
+  const [mediaSummary, widgetSetting, planStatus, recentItems] = await Promise.all([
     prisma.playlistMedia.groupBy({
       by: ["mediaType", "isActive"],
       where: { shop },
@@ -25,7 +25,7 @@ export const loader = async ({ request }) => {
       where: { shop_key: { shop, key: "widget_enabled" } },
       select: { value: true },
     }),
-    getShopPlan(shop, prisma),
+    getShopPlanStatus(shop, prisma, admin),
     prisma.playlistMedia.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
@@ -43,13 +43,14 @@ export const loader = async ({ request }) => {
   }
 
   const widgetEnabled = widgetSetting ? widgetSetting.value === "true" : true;
-  const plan          = getPlanDetails(planRecord);
+  const plan          = getPlanDetails(planStatus.record);
 
   return data({
     shop,
     stats: { totalMedia, activeMedia, audioCount, videoCount },
     widgetEnabled,
     recentItems,
+    billingVerified: planStatus.verified,
     // Infinity → null for JSON serialisation; component handles null as "unlimited"
     plan: { id: plan.id, name: plan.name, price: plan.price, limit: plan.limit === Infinity ? null : plan.limit },
   });
@@ -100,7 +101,7 @@ function Step({ number, title, description, action }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { shop, stats, widgetEnabled, recentItems, plan } = useLoaderData();
+  const { shop, stats, widgetEnabled, recentItems, plan, billingVerified } = useLoaderData();
   const hasItems = stats.totalMedia > 0;
   // plan.limit is null for UNLIMITED (serialised from Infinity); null = no cap
   const atLimit  = plan.limit !== null && stats.totalMedia >= plan.limit;
@@ -137,6 +138,21 @@ export default function Dashboard() {
             </BlockStack>
           </Banner>
         </Layout.Section>
+
+        {!billingVerified && (
+          <Layout.Section>
+            <Banner
+              tone="warning"
+              title="Subscription status is not verified"
+              action={{ content: "Review billing setup", url: "/app/billing" }}
+            >
+              <Text variant="bodySm">
+                The app is enforcing Free limits because Shopify could not verify the current plan.
+                Review billing setup or Partner API availability.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        )}
 
         {/* Plan limit warning */}
         {atLimit && (

@@ -32,8 +32,7 @@ import { UploadIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getShopPlan, getPlanDetails } from "../billing.server";
-import { PLANS } from "../plans.js";
+import { getShopPlanStatus, getPlanDetails } from "../billing.server";
 import { useState, useCallback, useEffect } from "react";
 
 // ─── GraphQL for Shopify Files upload ────────────────────────────────────────
@@ -61,6 +60,10 @@ const FILE_CREATE = `#graphql
           id fileStatus
           sources { url mimeType }
         }
+        ... on MediaImage {
+          id fileStatus
+          image { url }
+        }
         ... on GenericFile {
           id fileStatus url
         }
@@ -73,6 +76,10 @@ const FILE_CREATE = `#graphql
 const FILE_STATUS_QUERY = `#graphql
   query fileStatus($id: ID!) {
     node(id: $id) {
+      ... on MediaImage {
+        id fileStatus
+        image { url }
+      }
       ... on Video {
         id fileStatus
         sources { url mimeType }
@@ -88,8 +95,13 @@ const FILE_STATUS_QUERY = `#graphql
 
 function classifyFile(filename) {
   const ext = filename.split(".").pop().toLowerCase();
-  if (["mp4", "mov", "webm"].includes(ext))
-    return { resource: "VIDEO", mimeType: "video/mp4", contentType: "VIDEO" };
+  const videoMimeTypes = {
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    webm: "video/webm",
+  };
+  if (videoMimeTypes[ext])
+    return { resource: "VIDEO", mimeType: videoMimeTypes[ext], contentType: "VIDEO" };
   if (ext === "mp3")
     return { resource: "FILE", mimeType: "audio/mpeg", contentType: "FILE" };
   if (ext === "wav")
@@ -97,6 +109,22 @@ function classifyFile(filename) {
   if (ext === "ogg")
     return { resource: "FILE", mimeType: "audio/ogg", contentType: "FILE" };
   throw new Error(`Unsupported file type: .${ext}`);
+}
+
+function classifyThumbnailFile(file) {
+  const imageMimeTypes = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+  };
+  const ext = file.name.split(".").pop().toLowerCase();
+  const mimeType = imageMimeTypes[ext];
+  if (!mimeType || (file.type && file.type !== mimeType)) {
+    throw new Error("Thumbnail must be a JPEG, PNG, WebP, or GIF image.");
+  }
+  return { resource: "IMAGE", mimeType, contentType: "IMAGE" };
 }
 
 async function pollFileReady(admin, fileId) {
@@ -107,6 +135,7 @@ async function pollFileReady(admin, fileId) {
     if (!node) throw new Error("File node not found during polling");
     if (node.fileStatus === "READY") {
       const url =
+        node.image?.url ??
         node.sources?.find((s) => s.mimeType?.includes("mp4"))?.url ??
         node.sources?.[0]?.url ??
         node.url;
@@ -117,17 +146,127 @@ async function pollFileReady(admin, fileId) {
   throw new Error("Timed out waiting for file to be ready (90 s)");
 }
 
+async function uploadShopifyFile(admin, file, { resource, mimeType, contentType }) {
+  const filename = file.name;
+  const stageRes = await admin.graphql(STAGED_UPLOADS_CREATE, {
+    variables: {
+      input: [{
+        filename,
+        mimeType,
+        resource,
+        fileSize: String(file.size),
+        httpMethod: "POST",
+      }],
+    },
+  });
+  const stageJson = await stageRes.json();
+  const stagedUpload = stageJson.data?.stagedUploadsCreate;
+  const stageErrors = stagedUpload?.userErrors ?? [];
+  if (stageErrors.length) throw new Error(stageErrors.map((error) => error.message).join(", "));
+  if (!stagedUpload?.stagedTargets?.[0]) {
+    throw new Error("Shopify did not return a staged upload target.");
+  }
+
+  const target = stagedUpload.stagedTargets[0];
+  const uploadForm = new FormData();
+  target.parameters.forEach(({ name, value }) => uploadForm.append(name, value));
+  uploadForm.append("file", file);
+
+  const uploadResponse = await fetch(target.url, { method: "POST", body: uploadForm });
+  if (!uploadResponse.ok) {
+    throw new Error(`Shopify file upload failed with HTTP ${uploadResponse.status}.`);
+  }
+
+  const createResponse = await admin.graphql(FILE_CREATE, {
+    variables: {
+      files: [{ filename, contentType, originalSource: target.resourceUrl }],
+    },
+  });
+  const createJson = await createResponse.json();
+  const createPayload = createJson.data?.fileCreate;
+  const createErrors = createPayload?.userErrors ?? [];
+  if (createErrors.length) throw new Error(createErrors.map((error) => error.message).join(", "));
+  const createdFile = createPayload?.files?.[0];
+  if (!createdFile) throw new Error("Shopify did not return the uploaded file.");
+
+  return pollFileReady(admin, createdFile.id);
+}
+
+function readMediaFields(formData, sortOrderOverride) {
+  const value = (name) => {
+    const field = formData.get(name);
+    return typeof field === "string" ? field.trim() : "";
+  };
+  const title = value("title");
+  const mediaType = value("mediaType");
+  const sourceUrl = value("sourceUrl");
+  const thumbnailUrl = value("thumbnailUrl");
+  const isActive = value("isActive") === "true";
+  const sortOrderValue = sortOrderOverride ?? Number(value("sortOrder"));
+
+  if (!title || title.length > 120) {
+    throw new Error("Title is required and must be 120 characters or fewer.");
+  }
+  if (mediaType !== "audio" && mediaType !== "video") {
+    throw new Error("Media type must be audio or video.");
+  }
+  let source;
+  try {
+    source = new URL(sourceUrl);
+  } catch {
+    throw new Error("Enter a valid source URL.");
+  }
+  if (!["http:", "https:"].includes(source.protocol)) {
+    throw new Error("Source URL must use HTTP or HTTPS.");
+  }
+  if (thumbnailUrl) {
+    let thumbnail;
+    try {
+      thumbnail = new URL(thumbnailUrl);
+    } catch {
+      throw new Error("Enter a valid thumbnail URL.");
+    }
+    if (!["http:", "https:"].includes(thumbnail.protocol)) {
+      throw new Error("Thumbnail URL must use HTTP or HTTPS.");
+    }
+  }
+  if (!Number.isSafeInteger(sortOrderValue) || sortOrderValue < 0) {
+    throw new Error("Sort order must be a non-negative integer.");
+  }
+
+  return {
+    title,
+    mediaType,
+    sourceUrl: source.toString(),
+    thumbnailUrl: thumbnailUrl || null,
+    isActive,
+    sortOrder: sortOrderValue,
+  };
+}
+
+function readMediaId(formData) {
+  const id = Number(formData.get("id"));
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
-  const [mediaItems, planRecord] = await Promise.all([
+  const [mediaItems, planStatus] = await Promise.all([
     prisma.playlistMedia.findMany({ where: { shop }, orderBy: { sortOrder: "asc" } }),
-    getShopPlan(shop, prisma),
+    getShopPlanStatus(shop, prisma, admin),
   ]);
-  const plan = getPlanDetails(planRecord);
-  return data({ mediaItems, shop, planId: plan.id, planLimit: plan.limit, planName: plan.name });
+  const plan = getPlanDetails(planStatus.record);
+  return data({
+    mediaItems,
+    shop,
+    planId: plan.id,
+    planLimit: plan.limit,
+    planName: plan.name,
+    billingVerified: planStatus.verified,
+  });
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
@@ -142,7 +281,7 @@ export const action = async ({ request }) => {
     // ── Upload file to Shopify Files ────────────────────────────────────────
     if (intent === "upload") {
       // Check plan limit before uploading
-      const planRecord = await getShopPlan(shop, prisma);
+      const { record: planRecord } = await getShopPlanStatus(shop, prisma, admin);
       const plan       = getPlanDetails(planRecord);
       if (plan.limit !== Infinity) {
         const count = await prisma.playlistMedia.count({ where: { shop } });
@@ -158,54 +297,25 @@ export const action = async ({ request }) => {
       if (!file || typeof file === "string")
         return data({ success: false, error: "No file received" }, { status: 400 });
 
-      const filename = file.name;
-      const fileSize = String(file.size);
-      const { resource, mimeType, contentType } = classifyFile(filename);
+      const classification = classifyFile(file.name);
+      const cdnUrl = await uploadShopifyFile(admin, file, classification);
+      return data({ success: true, url: cdnUrl });
+    }
 
-      // Step 1 — get staged upload target
-      const stageRes = await admin.graphql(STAGED_UPLOADS_CREATE, {
-        variables: { input: [{ filename, mimeType, resource, fileSize, httpMethod: "POST" }] },
-      });
-      const stageJson = await stageRes.json();
-      const stageErrors = stageJson.data?.stagedUploadsCreate?.userErrors ?? [];
-      if (stageErrors.length) throw new Error(stageErrors.map((e) => e.message).join(", "));
-
-      const target = stageJson.data.stagedUploadsCreate.stagedTargets[0];
-      if (!target) throw new Error("No staged target returned from Shopify");
-
-      const { url: uploadUrl, resourceUrl, parameters } = target;
-
-      // Step 2 — PUT file bytes to CDN staging area
-      const uploadForm = new FormData();
-      parameters.forEach(({ name, value }) => uploadForm.append(name, value));
-      uploadForm.append("file", file); // must be last for S3
-
-      const putRes = await fetch(uploadUrl, { method: "POST", body: uploadForm });
-      if (!putRes.ok) {
-        const body = await putRes.text().catch(() => "");
-        throw new Error(`CDN upload failed (HTTP ${putRes.status}): ${body.slice(0, 300)}`);
+    if (intent === "uploadThumbnail") {
+      const file = formData.get("file");
+      if (!file || typeof file === "string") {
+        return data({ success: false, error: "No thumbnail image received." }, { status: 400 });
       }
-
-      // Step 3 — register in Shopify Files
-      const createRes = await admin.graphql(FILE_CREATE, {
-        variables: { files: [{ filename, contentType, originalSource: resourceUrl }] },
-      });
-      const createJson = await createRes.json();
-      const createErrors = createJson.data?.fileCreate?.userErrors ?? [];
-      if (createErrors.length) throw new Error(createErrors.map((e) => e.message).join(", "));
-
-      const createdFile = createJson.data.fileCreate.files[0];
-      if (!createdFile) throw new Error("fileCreate returned no file");
-
-      // Step 4 — poll until READY
-      const cdnUrl = await pollFileReady(admin, createdFile.id);
+      const classification = classifyThumbnailFile(file);
+      const cdnUrl = await uploadShopifyFile(admin, file, classification);
       return data({ success: true, url: cdnUrl });
     }
 
     // ── CRUD operations ─────────────────────────────────────────────────────
     if (intent === "create") {
       // ── Plan limit check ───────────────────────────────────────────────────
-      const planRecord = await getShopPlan(shop, prisma);
+      const { record: planRecord } = await getShopPlanStatus(shop, prisma, admin);
       const plan       = getPlanDetails(planRecord);
       if (plan.limit !== Infinity) {
         const count = await prisma.playlistMedia.count({ where: { shop } });
@@ -224,54 +334,96 @@ export const action = async ({ request }) => {
       const item = await prisma.playlistMedia.create({
         data: {
           shop,
-          title: formData.get("title"),
-          mediaType: formData.get("mediaType"),
-          sourceUrl: formData.get("sourceUrl"),
-          thumbnailUrl: formData.get("thumbnailUrl") || null,
-          isActive: formData.get("isActive") === "true",
-          sortOrder: nextOrder,
+          ...readMediaFields(formData, nextOrder),
         },
       });
       return data({ success: true, intent: "create", item });
     }
 
     if (intent === "update") {
-      const item = await prisma.playlistMedia.update({
-        where: { id: Number(formData.get("id")) },
-        data: {
-          title: formData.get("title"),
-          mediaType: formData.get("mediaType"),
-          sourceUrl: formData.get("sourceUrl"),
-          thumbnailUrl: formData.get("thumbnailUrl") || null,
-          isActive: formData.get("isActive") === "true",
-          sortOrder: Number(formData.get("sortOrder") ?? 0),
-        },
+      const id = readMediaId(formData);
+      if (!id) return data({ success: false, error: "Invalid media item ID." }, { status: 400 });
+      const item = await prisma.$transaction(async (tx) => {
+        const ownedItem = await tx.playlistMedia.findFirst({
+          where: { id, shop },
+          select: { id: true },
+        });
+        if (!ownedItem) return null;
+        return tx.playlistMedia.update({
+          where: { id },
+          data: readMediaFields(formData),
+        });
       });
+      if (!item) return data({ success: false, error: "Media item not found." }, { status: 404 });
       return data({ success: true, intent: "update", item });
     }
 
     if (intent === "delete") {
-      await prisma.playlistMedia.delete({ where: { id: Number(formData.get("id")) } });
+      const id = readMediaId(formData);
+      if (!id) return data({ success: false, error: "Invalid media item ID." }, { status: 400 });
+      const { count } = await prisma.playlistMedia.deleteMany({ where: { id, shop } });
+      if (!count) return data({ success: false, error: "Media item not found." }, { status: 404 });
       return data({ success: true, intent: "delete" });
     }
 
     if (intent === "toggleActive") {
-      const current = await prisma.playlistMedia.findUnique({
-        where: { id: Number(formData.get("id")) },
-        select: { isActive: true },
+      const id = readMediaId(formData);
+      if (!id) return data({ success: false, error: "Invalid media item ID." }, { status: 400 });
+      const item = await prisma.$transaction(async (tx) => {
+        const current = await tx.playlistMedia.findFirst({
+          where: { id, shop },
+          select: { isActive: true },
+        });
+        if (!current) return null;
+        await tx.playlistMedia.updateMany({
+          where: { id, shop, isActive: current.isActive },
+          data: { isActive: !current.isActive },
+        });
+        return tx.playlistMedia.findFirst({ where: { id, shop } });
       });
-      const item = await prisma.playlistMedia.update({
-        where: { id: Number(formData.get("id")) },
-        data: { isActive: !current.isActive },
-      });
+      if (!item) return data({ success: false, error: "Media item not found." }, { status: 404 });
       return data({ success: true, intent: "toggleActive", item });
     }
 
     if (intent === "reorder") {
-      const items = JSON.parse(formData.get("items"));
-      await Promise.all(
+      const rawItems = formData.get("items");
+      if (typeof rawItems !== "string") {
+        return data({ success: false, error: "Invalid playlist order." }, { status: 400 });
+      }
+      const items = JSON.parse(rawItems);
+      if (
+        !Array.isArray(items) ||
+        items.some((item) =>
+          !item ||
+          typeof item !== "object" ||
+          Array.isArray(item) ||
+          !Number.isSafeInteger(item.id) ||
+          item.id < 1 ||
+          !Number.isSafeInteger(item.sortOrder) ||
+          item.sortOrder < 0
+        ) ||
+        new Set(items.map(({ id }) => id)).size !== items.length ||
+        new Set(items.map(({ sortOrder }) => sortOrder)).size !== items.length
+      ) {
+        return data({ success: false, error: "Invalid playlist order." }, { status: 400 });
+      }
+      const ownedItems = await prisma.playlistMedia.findMany({
+        where: { shop },
+        select: { id: true },
+      });
+      const ownedItemIds = new Set(ownedItems.map(({ id }) => id));
+      if (
+        ownedItems.length !== items.length ||
+        items.some(({ id }) => !ownedItemIds.has(id))
+      ) {
+        return data({ success: false, error: "Playlist changed; reload and try again." }, { status: 409 });
+      }
+      await prisma.$transaction(
         items.map(({ id, sortOrder }) =>
-          prisma.playlistMedia.update({ where: { id }, data: { sortOrder } }),
+          prisma.playlistMedia.updateMany({
+            where: { id, shop },
+            data: { sortOrder },
+          }),
         ),
       );
       return data({ success: true, intent: "reorder" });
@@ -335,12 +487,13 @@ function SummaryCard({ label, value, tone = "default" }) {
 
 export default function PlaylistAdmin() {
   // loader data — single source of truth
-  const { mediaItems, planId, planLimit, planName } = useLoaderData();
+  const { mediaItems, planLimit, planName, billingVerified } = useLoaderData();
   const atLimit = planLimit !== null && planLimit !== undefined && mediaItems.length >= planLimit;
 
   // One fetcher for CRUD mutations, one dedicated fetcher for file upload
   const crudFetcher   = useFetcher({ key: "playlist-crud" });
   const uploadFetcher = useFetcher({ key: "playlist-upload" });
+  const thumbnailUploadFetcher = useFetcher({ key: "playlist-thumbnail-upload" });
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const [modalOpen,       setModalOpen]       = useState(false);
@@ -350,6 +503,7 @@ export default function PlaylistAdmin() {
   const [form,            setForm]            = useState(EMPTY_FORM);
   const [sourceTab,       setSourceTab]       = useState(0); // 0=URL 1=Upload
   const [droppedFile,     setDroppedFile]     = useState(null);
+  const [thumbnailFile,  setThumbnailFile]  = useState(null);
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   const [toastActive,  setToastActive]  = useState(false);
@@ -376,6 +530,12 @@ export default function PlaylistAdmin() {
     }
   }, [uploadDone, uploadData?.url]);
 
+  useEffect(() => {
+    if (thumbnailUploadFetcher.data?.success && thumbnailUploadFetcher.data?.url) {
+      setForm((p) => ({ ...p, thumbnailUrl: thumbnailUploadFetcher.data.url }));
+    }
+  }, [thumbnailUploadFetcher.data]);
+
   // When CRUD fetcher finishes, show feedback
   useEffect(() => {
     if (crudFetcher.state === "idle" && crudFetcher.data) {
@@ -396,6 +556,7 @@ export default function PlaylistAdmin() {
 
   const resetUpload = useCallback(() => {
     setDroppedFile(null);
+    setThumbnailFile(null);
     setSourceTab(0);
   }, []);
 
@@ -438,6 +599,10 @@ export default function PlaylistAdmin() {
     }));
   }, []);
 
+  const handleThumbnailDrop = useCallback((_all, accepted) => {
+    setThumbnailFile(accepted[0] ?? null);
+  }, []);
+
   // ── Upload to Shopify Files (via authenticated action) ────────────────────
 
   const handleUploadFile = useCallback(() => {
@@ -448,6 +613,14 @@ export default function PlaylistAdmin() {
     // encType multipart/form-data is automatic when FormData contains a File
     uploadFetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
   }, [droppedFile, uploadFetcher]);
+
+  const handleUploadThumbnail = useCallback(() => {
+    if (!thumbnailFile) return;
+    const fd = new FormData();
+    fd.append("intent", "uploadThumbnail");
+    fd.append("file", thumbnailFile);
+    thumbnailUploadFetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
+  }, [thumbnailFile, thumbnailUploadFetcher]);
 
   // ── Save item (create / update) ───────────────────────────────────────────
 
@@ -518,7 +691,8 @@ export default function PlaylistAdmin() {
     form.title.trim() &&
     form.sourceUrl.trim() &&
     !isMutating &&
-    !isUploading;
+    !isUploading &&
+    thumbnailUploadFetcher.state === "idle";
 
   const sourceTabs = [
     { id: "url",    content: "Paste URL"   },
@@ -534,6 +708,21 @@ export default function PlaylistAdmin() {
       backAction={{ content: "Dashboard", url: "/app" }}
     >
       <Layout>
+        {!billingVerified && (
+          <Layout.Section>
+            <Banner
+              tone="warning"
+              title="Subscription status is not verified"
+              action={{ content: "Review billing setup", onAction: () => { window.top.location.href = "/app/billing"; } }}
+            >
+              <Text variant="bodySm">
+                The playlist is available with Free limits because Shopify could not verify the current plan.
+                Review billing setup or Partner API availability.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        )}
+
         {atLimit && (
           <Layout.Section>
             <Banner
@@ -929,7 +1118,7 @@ export default function PlaylistAdmin() {
 
               <Text variant="bodySm" tone="subdued">
                 Files are stored permanently in your Shopify Files library and
-                served via Shopify's global CDN.
+                served via Shopify&apos;s global CDN.
               </Text>
             </BlockStack>
           )}
@@ -946,6 +1135,39 @@ export default function PlaylistAdmin() {
               placeholder="https://example.com/cover.jpg"
               helpText="Leave blank to use the auto-generated thumbnail."
             />
+            <DropZone
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              type="image"
+              onDrop={handleThumbnailDrop}
+              disabled={thumbnailUploadFetcher.state !== "idle"}
+              variableHeight
+            >
+              <DropZone.FileUpload
+                actionTitle="Choose thumbnail image"
+                actionHint="JPEG, PNG, WebP, or GIF"
+              />
+            </DropZone>
+            {thumbnailFile && (
+              <InlineStack gap="300" blockAlign="center">
+                <Text variant="bodySm">{thumbnailFile.name}</Text>
+                <Button
+                  variant="secondary"
+                  onClick={handleUploadThumbnail}
+                  loading={thumbnailUploadFetcher.state !== "idle"}
+                  disabled={thumbnailUploadFetcher.state !== "idle"}
+                >
+                  Upload to Shopify Files
+                </Button>
+              </InlineStack>
+            )}
+            {thumbnailUploadFetcher.data?.success && (
+              <Banner tone="success">Thumbnail uploaded to Shopify Files.</Banner>
+            )}
+            {thumbnailUploadFetcher.data?.success === false && (
+              <Banner tone="critical">
+                {thumbnailUploadFetcher.data.error || "Thumbnail upload failed."}
+              </Banner>
+            )}
             <Checkbox
               label="Active — visible in the storefront widget"
               checked={form.isActive}
@@ -993,4 +1215,3 @@ export default function PlaylistAdmin() {
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
-

@@ -238,6 +238,9 @@
   opacity: 1;
 }
 
+.avp-root--provider-player .avp-overlay-controls { display: none; }
+.avp-root--provider-player .avp-card__media > iframe { pointer-events: auto; }
+
 /* ── Track info strip — hide title and badge ─────────────────────────────── */
 .avp-overlay-info    { display: none !important; }
 .avp-overlay-badge   { display: none !important; }

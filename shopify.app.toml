@@ -24,7 +24,7 @@ api_version = "2026-10"
 scopes = "read_files,read_themes,write_files,write_themes,write_app_proxy"
 
 [auth]
-redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/api/auth" ]
+redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/auth/callback" ]
 
 [app_proxy]
 url = "https://saitriq-entertainment-player.vercel.app/apps/playlist"

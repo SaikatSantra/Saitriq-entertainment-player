@@ -2,7 +2,7 @@
  * /app/billing — Plan selection page
  */
 
-import { useLoaderData, useFetcher, data, redirect } from "react-router";
+import { useLoaderData, useFetcher, data } from "react-router";
 import {
   Page, Layout, Card, Text, Button, BlockStack, InlineStack,
   Divider, Badge, Banner, List, Toast, Box,
@@ -11,41 +11,47 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { PLANS, getPlanDetails } from "../plans.js";
-import { getShopPlan, createSubscriptionUrl, cancelToPlan } from "../billing.server";
+import { getShopPlanStatus, getPricingPageUrl } from "../billing.server";
 import { useState, useEffect } from "react";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop   = session.shop;
-  const record = await getShopPlan(shop, prisma);
-  const plan   = getPlanDetails(record);
+  const planStatus = await getShopPlanStatus(shop, prisma, admin);
+  const plan   = getPlanDetails(planStatus.record);
+  const url = new URL(request.url);
   // Serialise plans as plain objects (Infinity → null for JSON)
   const plans  = Object.values(PLANS).map((p) => ({
     ...p,
     limit: p.limit === Infinity ? null : p.limit,
   }));
-  return data({ currentPlanId: plan.id, plans, shop });
+  return data({
+    currentPlanId: planStatus.verified ? plan.id : null,
+    billingVerified: planStatus.verified,
+    plans,
+    shop,
+    pricingUpdated: url.searchParams.get("pricing") === "updated",
+    pricingError: url.searchParams.get("error"),
+  });
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }) => {
-  const { session, admin } = await authenticate.admin(request);
-  const shop   = session.shop;
+  const { session, admin, redirect: shopifyRedirect } = await authenticate.admin(request);
+  const shop = session.shop;
   const fd     = await request.formData();
   const intent = fd.get("intent");
   const planId = fd.get("planId");
 
   if (intent === "upgrade") {
-    if (planId === "FREE") {
-      await cancelToPlan(admin, prisma, shop);
-      return data({ success: true, downgraded: true });
+    if (typeof planId !== "string" || !Object.hasOwn(PLANS, planId)) {
+      return data({ success: false, error: "Choose a valid plan." }, { status: 400 });
     }
-    const confirmUrl = await createSubscriptionUrl(admin, planId);
-    if (confirmUrl) return redirect(confirmUrl);
-    return data({ success: false, error: "Could not create subscription URL. Check that SHOPIFY_APP_URL is set correctly." });
+    const pricingPageUrl = await getPricingPageUrl(admin, shop);
+    return shopifyRedirect(pricingPageUrl, { target: "_top" });
   }
 
   return data({ success: false, error: "Unknown intent" });
@@ -114,7 +120,7 @@ function PlanCard({ plan, isCurrent, onSelect, loading }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  const { currentPlanId, plans } = useLoaderData();
+  const { currentPlanId, billingVerified, plans, pricingUpdated, pricingError } = useLoaderData();
   const fetcher = useFetcher();
 
   const [toastActive,  setToastActive]  = useState(false);
@@ -123,13 +129,21 @@ export default function BillingPage() {
   const [loadingPlan,  setLoadingPlan]  = useState(null);
 
   useEffect(() => {
-    if (fetcher.state !== "idle") return;
-    // fetcher just became idle — check the result
-    if (fetcher.data?.downgraded) {
-      setToastMessage("Downgraded to Free plan.");
+    if (pricingUpdated) {
+      setToastMessage("Shopify subscription status updated.");
       setToastError(false);
       setToastActive(true);
-    } else if (fetcher.data?.error) {
+    } else if (pricingError) {
+      setToastMessage("Unable to confirm the Shopify plan update. Try refreshing billing status.");
+      setToastError(true);
+      setToastActive(true);
+    }
+  }, [pricingUpdated, pricingError]);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle") return;
+    // fetcher just became idle — check the result
+    if (fetcher.data?.error) {
       setToastMessage(fetcher.data.error);
       setToastError(true);
       setToastActive(true);
@@ -160,6 +174,19 @@ export default function BillingPage() {
             </Text>
           </Banner>
         </Layout.Section>
+
+        {!billingVerified && (
+          <Layout.Section>
+            <Banner tone="warning" title="Subscription status is not verified">
+              <Text as="span" variant="bodyMd">
+                Plan changes still happen on Shopify’s hosted pricing page, but this app
+                cannot confirm the selected plan. Check that the Partner API client has
+                Manage apps permission and that its credentials are available; until then,
+                Free limits are applied.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        )}
 
         <Layout.Section>
           <InlineStack gap="400" align="start" wrap={false}>

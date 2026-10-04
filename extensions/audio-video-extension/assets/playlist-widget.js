@@ -1,9 +1,9 @@
-/**
- * Audio & Video Playlist Widget — Storefront Player
+﻿/**
+ * Audio & Video Playlist Widget â€” Storefront Player
  *
  * Behaviour:
  *  - Panel opens automatically on page load
- *  - First track plays automatically, unmuted
+ *  - Autoplay follows the merchant setting and starts muted
  *  - If browser blocks unmuted autoplay, retries muted (browser policy)
  *  - If browser blocks all autoplay, shows play button for user to tap
  *  - YouTube, TikTok, native MP4 video, native MP3 audio all supported
@@ -18,13 +18,13 @@
   const STACK_DEPTH     = 3;
   const SWIPE_THRESHOLD = 55;
 
-  // ── Detect Shopify theme editor ────────────────────────────────────────────
+  // â”€â”€ Detect Shopify theme editor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // window.Shopify.designMode is true when the page is loaded inside the
   // theme customiser iframe. We skip autoplay and avoid re-init on section
   // reload events.
   const IN_EDITOR = !!(window.Shopify && window.Shopify.designMode);
 
-  // ── Boot ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Boot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   function boot() {
     const root = document.getElementById('avp-root');
@@ -32,7 +32,7 @@
 
     // Teardown any existing instance before creating a new one.
     // This handles the theme editor's section:load event which re-injects
-    // the block HTML but keeps the same JS context — without teardown a
+    // the block HTML but keeps the same JS context â€” without teardown a
     // second instance would be created on the re-injected root.
     if (root._avpInstance) {
       root._avpInstance._teardown();
@@ -58,20 +58,20 @@
     if (root && !root._avpInstance) boot();
   });
 
-  // ── Widget class ───────────────────────────────────────────────────────────
+  // â”€â”€ Widget class â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   class AVPWidget {
     constructor(root, opts = {}) {
       this.root        = root;
-      this.shop        = (root.dataset.shop || '').trim();
       this.loop        = root.dataset.loop !== 'false';
       this.accentColor = root.dataset.accent || '#667eea';
+      this.autoplay    = false;
       this.skipAutoplay = opts.skipAutoplay || false;
 
       this.playlist       = [];
       this.currentIndex   = -1;
       this.isPlaying      = false;
-      this.isMuted        = false;   // always start unmuted
+      this.isMuted        = false;
       this.panelOpen      = false;
       this.drawerOpen     = false;
       this._progressTimer = null;
@@ -104,9 +104,14 @@
       this._bindUI();
       this._updateMuteBtn();
 
-      // Open panel on page load — unless the user already closed it this session
+      // Open panel on page load â€” unless the user already closed it this session
       this.$.panel.style.transition = 'none';
-      const closedThisSession = sessionStorage.getItem('avp-panel-closed') === '1';
+      let closedThisSession = false;
+      try {
+        closedThisSession = sessionStorage.getItem('avp-panel-closed') === '1';
+      } catch (_) {
+        closedThisSession = false;
+      }
       if (!closedThisSession) {
         this._togglePanel();   // open by default
       }
@@ -115,12 +120,12 @@
       this._loadPlaylist();
     }
 
-    // ── Accent ────────────────────────────────────────────────────────────────
+    // â”€â”€ Accent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _applyAccent() {
       this.root.style.setProperty('--avp-accent', this.accentColor);
     }
 
-    // ── UI bindings ───────────────────────────────────────────────────────────
+    // â”€â”€ UI bindings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _bindUI() {
       const { fab, prev, play, next, mute, seek, drawerToggle } = this.$;
 
@@ -147,11 +152,11 @@
         const dx = e.changedTouches[0].clientX - startX;
         if (dx < -SWIPE_THRESHOLD) this.playNext();
         else if (dx > SWIPE_THRESHOLD) this.playPrev();
-        else this._flashControls();   // tap without swipe → briefly show controls
+        else this._flashControls();   // tap without swipe â†’ briefly show controls
       }, { passive: true });
     }
 
-    // ── Flash controls briefly (for touch devices with no hover) ─────────────
+    // â”€â”€ Flash controls briefly (for touch devices with no hover) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _flashControls() {
       const ctrl = this.root.querySelector('#avp-overlay-controls');
       if (!ctrl) return;
@@ -162,7 +167,7 @@
       }, 3000);
     }
 
-    // ── Panel toggle ──────────────────────────────────────────────────────────
+    // â”€â”€ Panel toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _togglePanel() {
       this.panelOpen = !this.panelOpen;
       const { fab, panel } = this.$;
@@ -174,8 +179,8 @@
       fab.querySelector('.avp-fab-icon--close').style.display = this.panelOpen ? ''     : 'none';
 
       // Remember user preference for this browser session:
-      // closed → don't auto-open on next page navigation
-      // opened → clear the flag so future sessions open by default
+      // closed â†’ don't auto-open on next page navigation
+      // opened â†’ clear the flag so future sessions open by default
       if (!this.panelOpen) {
         try { sessionStorage.setItem('avp-panel-closed', '1'); } catch (_) {}
       } else {
@@ -183,42 +188,59 @@
       }
     }
 
-    // ── Load playlist then autoplay unmuted ───────────────────────────────────
+    // â”€â”€ Load playlist then autoplay unmuted â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _loadPlaylist() {
       try {
-        const shop = (this.shop || (window.Shopify && window.Shopify.shop) || '').trim();
+        // Shopify adds and signs the app-proxy query parameters, including shop.
         const target = new URL('/apps/playlist/api/media', window.location.origin);
-        if (shop) target.searchParams.set('shop', shop);
 
         const res = await fetch(target.toString(), {
           headers: { 'Accept': 'application/json' },
-          credentials: 'same-origin',
         });
 
         if (!res.ok) {
           const body = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status} — ${body.slice(0, 120)}`);
+          throw new Error(`HTTP ${res.status} â€” ${body.slice(0, 120)}`);
         }
 
         const json = await res.json();
         if (!json.success) throw new Error(json.error || 'API error');
+
+        const settings = json.settings || {};
+        if (settings.widget_enabled === false) {
+          this._teardown();
+          this.root.remove();
+          return;
+        }
+        if (['bottom-left', 'bottom-right', 'top-left', 'top-right'].includes(settings.widget_position)) {
+          this.root.dataset.position = settings.widget_position;
+        }
+        if (typeof settings.loop_playlist === 'boolean') {
+          this.loop = settings.loop_playlist;
+        }
+        this.autoplay = settings.autoplay === true;
+        if (typeof settings.widget_title === 'string' && settings.widget_title.trim()) {
+          const label = this.root.querySelector('.avp-drawer__label');
+          if (label) label.textContent = settings.widget_title.trim();
+        }
 
         this.playlist = json.items || [];
         this._renderCards();
         this._renderTrackList();
         this._setTransportEnabled(this.playlist.length > 0);
 
-        // Skip autoplay in the theme editor — just load and show the playlist
-        if (!this.skipAutoplay && this.playlist.length > 0) {
+        if (!this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
+          this.isMuted = true;
+          this._updateMuteBtn();
           this.playAt(0);
         }
       } catch (err) {
         console.error('[AVP] Could not load playlist:', err.message);
-        this._showEmpty('Could not load playlist.');
+        this._showEmpty('Playlist is temporarily unavailable. Please try again later.');
       }
     }
 
-    // ── Cards ─────────────────────────────────────────────────────────────────
+    // â”€â”€ Cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _renderCards() {
       this.$.stage.querySelectorAll('.avp-card').forEach((c) => c.remove());
 
@@ -288,20 +310,26 @@
         card.classList.remove('avp-card--active', 'avp-card--behind', 'avp-card--hidden');
         if (rel === 0) {
           card.classList.add('avp-card--active');
-          card.style.cssText += ';transform:translateX(0) rotate(0deg) scale(1);z-index:10;opacity:1;';
+          card.style.transform = 'translateX(0) rotate(0deg) scale(1)';
+          card.style.zIndex    = '10';
+          card.style.opacity   = '1';
         } else if (rel > 0 && rel <= STACK_DEPTH) {
           card.classList.add('avp-card--behind');
           const ox = rel * CARD_OFFSET_X, oy = rel * CARD_OFFSET_Y;
           const rot = rel % 2 === 0 ? rel * 1.5 : -rel * 1.5;
-          card.style.cssText += `;transform:translate(${ox}px,${oy}px) rotate(${rot}deg) scale(${1 - rel * 0.03});z-index:${10 - rel};opacity:${1 - rel * 0.15};`;
+          card.style.transform = `translate(${ox}px,${oy}px) rotate(${rot}deg) scale(${1 - rel * 0.03})`;
+          card.style.zIndex    = String(10 - rel);
+          card.style.opacity   = String(1 - rel * 0.15);
         } else {
           card.classList.add('avp-card--hidden');
-          card.style.cssText += ';transform:translateX(60px) scale(0.85);z-index:0;opacity:0;';
+          card.style.transform = 'translateX(60px) scale(0.85)';
+          card.style.zIndex    = '0';
+          card.style.opacity   = '0';
         }
       });
     }
 
-    // ── Track list ────────────────────────────────────────────────────────────
+    // â”€â”€ Track list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _renderTrackList() {
       const ul = this.$.trackList;
       ul.innerHTML = '';
@@ -312,7 +340,7 @@
 
         const type = document.createElement('span');
         type.className = `avp-track__type avp-track__type--${item.mediaType}`;
-        type.textContent = item.mediaType === 'audio' ? '🎵' : '🎬';
+        type.textContent = item.mediaType === 'audio' ? 'ðŸŽµ' : 'ðŸŽ¬';
 
         const title = document.createElement('span');
         title.className = 'avp-track__title';
@@ -345,16 +373,20 @@
         this.drawerOpen ? 'rotate(180deg)' : '';
     }
 
-    // ── Core playback ─────────────────────────────────────────────────────────
+    // â”€â”€ Core playback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async playAt(idx) {
       if (idx < 0 || idx >= this.playlist.length) return;
 
       this._teardown();
       this.currentIndex = idx;
       const item = this.playlist[idx];
+      const usesProviderControls = this._isTikTok(item.sourceUrl)
+        || this._isFacebook(item.sourceUrl)
+        || this._isInstagram(item.sourceUrl);
+      this.root.classList.toggle('avp-root--provider-player', usesProviderControls);
 
       // Set stage aspect ratio to match media type BEFORE rendering
-      // video / YouTube / TikTok / Facebook → 16:9  |  audio → 1:1 (square cover art)
+      // video / YouTube / TikTok / Facebook â†’ 16:9  |  audio â†’ 1:1 (square cover art)
       const isAudio = item.mediaType === 'audio'
         && !this._isYouTube(item.sourceUrl)
         && !this._isTikTok(item.sourceUrl)
@@ -369,7 +401,7 @@
       // Update overlay info strip
       if (this.$.overlayInfo) {
         this.$.overlayInfo.style.display = 'flex';
-        this.$.overlayBadge.textContent  = (item.mediaType === 'audio' ? '🎵 ' : '🎬 ') + item.mediaType.toUpperCase();
+        this.$.overlayBadge.textContent  = (item.mediaType === 'audio' ? 'ðŸŽµ ' : 'ðŸŽ¬ ') + item.mediaType.toUpperCase();
         this.$.overlayBadge.className    = `avp-card__badge avp-card__badge--${item.mediaType}`;
         this.$.overlayTitle.textContent  = item.title;
       }
@@ -454,13 +486,12 @@
       }
     }
 
-    // ── Native audio ──────────────────────────────────────────────────────────
+    // â”€â”€ Native audio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _playAudio(item) {
       const audio = new Audio();
       audio.preload     = 'auto';
       audio.volume      = 1;
-      audio.muted       = false;    // always start unmuted
-      audio.crossOrigin = 'anonymous';
+      audio.muted       = this.isMuted;
       this.nativeEl     = audio;
 
       audio.addEventListener('timeupdate', () => this._tickNative());
@@ -473,22 +504,21 @@
 
       try {
         await audio.play();
-        // Success — ensure UI reflects unmuted
-        this.isMuted = false;
         this._updateMuteBtn();
-        this._hideMuteToast();
+        if (this.isMuted) this._showMuteToast();
+        else this._hideMuteToast();
       } catch (err) {
-        if (err.name === 'NotAllowedError') {
-          // Browser blocked unmuted autoplay — retry muted
+        if (err.name === 'NotAllowedError' && !this.isMuted) {
+          // Browser blocked unmuted autoplay â€” retry muted
           console.info('[AVP] Unmuted autoplay blocked, retrying muted');
           audio.muted  = true;
           this.isMuted = true;
           this._updateMuteBtn();
           try {
             await audio.play();
-            this._showMuteToast();  // playing muted — tell the user
+            this._showMuteToast();  // playing muted â€” tell the user
           } catch (err2) {
-            // All autoplay blocked — show play button, keep unmuted preference
+            // All autoplay blocked â€” show play button, keep unmuted preference
             console.info('[AVP] All autoplay blocked:', err2.name);
             audio.muted  = false;
             this.isMuted = false;
@@ -502,13 +532,13 @@
       }
     }
 
-    // ── Native video ──────────────────────────────────────────────────────────
+    // â”€â”€ Native video â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _playVideo(item, cardEl) {
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
       if (mediaEl) mediaEl.style.display = 'block';
 
       const video = document.createElement('video');
-      video.muted       = false;    // always start unmuted
+      video.muted       = this.isMuted;
       video.volume      = 1;
       video.preload     = 'auto';
       video.playsInline = true;
@@ -541,22 +571,21 @@
 
       try {
         await video.play();
-        // Success — ensure UI reflects unmuted
-        this.isMuted = false;
         this._updateMuteBtn();
-        this._hideMuteToast();
+        if (this.isMuted) this._showMuteToast();
+        else this._hideMuteToast();
       } catch (err) {
-        if (err.name === 'NotAllowedError') {
-          // Browser blocked unmuted autoplay — retry muted
+        if (err.name === 'NotAllowedError' && !this.isMuted) {
+          // Browser blocked unmuted autoplay â€” retry muted
           console.info('[AVP] Unmuted video autoplay blocked, retrying muted');
           video.muted  = true;
           this.isMuted = true;
           this._updateMuteBtn();
           try {
             await video.play();
-            this._showMuteToast();  // playing muted — tell the user
+            this._showMuteToast();  // playing muted â€” tell the user
           } catch (err2) {
-            // All autoplay blocked — show play button
+            // All autoplay blocked â€” show play button
             console.info('[AVP] All video autoplay blocked:', err2.name);
             video.muted  = false;
             this.isMuted = false;
@@ -570,7 +599,7 @@
       }
     }
 
-    // ── YouTube ───────────────────────────────────────────────────────────────
+    // â”€â”€ YouTube â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _playYT(item, cardEl) {
       const videoId = this._ytId(item.sourceUrl);
       if (!videoId) return;
@@ -611,15 +640,17 @@
             playsinline:    1,
             enablejsapi:    1,
             origin:         window.location.origin,
-            mute:           0,
+            mute:           this.isMuted ? 1 : 0,
           },
           events: {
             onReady: (e) => {
               clearTimeout(timer);
               resolved = true;
-              // Ensure unmuted — YouTube sometimes ignores mute:0
-              try { e.target.unMute(); e.target.setVolume(100); } catch (_) {}
-              this.isMuted = false;
+              try {
+                e.target.setVolume(100);
+                if (this.isMuted) e.target.mute();
+                else e.target.unMute();
+              } catch (_) {}
               this._updateMuteBtn();
               e.target.playVideo();
               this._setPlayState(true);
@@ -669,7 +700,7 @@
       }, 500);
     }
 
-    // ── TikTok ────────────────────────────────────────────────────────────────
+    // â”€â”€ TikTok â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async _playTikTok(item, cardEl) {
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
       if (mediaEl) mediaEl.style.display = 'block';
@@ -685,14 +716,14 @@
       iframe.allow = 'autoplay; fullscreen';
       iframe.setAttribute('allowfullscreen', '');
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-presentation');
-      iframe.style.cssText = 'width:100%;height:100%;border:none;';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;pointer-events:auto;';
       if (mediaEl) { mediaEl.innerHTML = ''; mediaEl.appendChild(iframe); }
       this.tiktokIframe = iframe;
-      this._setPlayState(true);
+      this._setPlayState(false);
       this._updateProgress(0, 0);
     }
 
-    // ── Facebook Video / Reel ─────────────────────────────────────────────────
+    // â”€â”€ Facebook Video / Reel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     /**
      * Embeds any Facebook video or reel URL using Facebook's official
      * plugins/video endpoint. Works for:
@@ -701,7 +732,7 @@
      *  - facebook.com/video/1234567890
      *  - fb.watch/XXXXX short links
      *
-     * Note: Facebook's embed player has its own play button — we show the
+     * Note: Facebook's embed player has its own play button â€” we show the
      * iframe and let the customer press play inside it (FB's autoplay is
      * blocked by most browsers and requires domain registration).
      */
@@ -709,7 +740,7 @@
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
       if (mediaEl) mediaEl.style.display = 'block';
 
-      // Facebook's official oembed/plugin iframe — accepts any FB video URL
+      // Facebook's official oembed/plugin iframe â€” accepts any FB video URL
       const embedUrl =
         `https://www.facebook.com/plugins/video.php` +
         `?href=${encodeURIComponent(item.sourceUrl)}` +
@@ -723,7 +754,7 @@
       iframe.allow = 'autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share';
       iframe.setAttribute('allowfullscreen', '');
       iframe.setAttribute('scrolling', 'no');
-      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;pointer-events:auto;';
 
       if (mediaEl) {
         mediaEl.innerHTML = '';
@@ -731,11 +762,11 @@
       }
 
       this.tiktokIframe = iframe; // reuse the same teardown handle
-      this._setPlayState(true);
+      this._setPlayState(false);
       this._updateProgress(0, 0);
     }
 
-    // ── Instagram Reels / Videos ──────────────────────────────────────────────
+    // â”€â”€ Instagram Reels / Videos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     /**
      * Embeds any Instagram reel or video URL using Instagram's oEmbed iframe.
      *
@@ -750,7 +781,7 @@
      *
      * Note: Instagram restricts embeds to domains registered in Meta for
      * Developers. On unregistered domains the iframe shows a login prompt.
-     * This is a Meta platform limitation — not something the app can bypass.
+     * This is a Meta platform limitation â€” not something the app can bypass.
      */
     async _playInstagram(item, cardEl) {
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
@@ -763,7 +794,7 @@
         return;
       }
 
-      // Direct embed URL — works without the Instagram JS SDK
+      // Direct embed URL â€” works without the Instagram JS SDK
       const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
 
       const iframe = document.createElement('iframe');
@@ -772,7 +803,7 @@
       iframe.setAttribute('allowfullscreen', '');
       iframe.setAttribute('scrolling', 'no');
       // Instagram embeds are designed for a 400px+ width; scale to fit our panel
-      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;overflow:hidden;pointer-events:auto;';
 
       if (mediaEl) {
         mediaEl.innerHTML = '';
@@ -780,13 +811,13 @@
       }
 
       this.tiktokIframe = iframe; // reuse the same teardown handle
-      this._setPlayState(true);
+      this._setPlayState(false);
       this._updateProgress(0, 0);
     }
 
     /** Extract the shortcode from any Instagram URL variant */
     _igShortcode(url) {
-      // Matches /reel/CODE, /p/CODE, /tv/CODE — with or without trailing slash
+      // Matches /reel/CODE, /p/CODE, /tv/CODE â€” with or without trailing slash
       const m = url.match(/instagram\.com\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)/i);
       return m ? m[1] : null;
     }
@@ -797,7 +828,7 @@
      *  - vm links:     vm.tiktok.com/XXXXXXX
      *
      *  TikTok's /embed/v2 endpoint accepts the full original URL as a ?url= param,
-     *  which means it handles redirects itself — no browser-side resolution needed.
+     *  which means it handles redirects itself â€” no browser-side resolution needed.
      */
     _tikTokEmbedUrl(url) {
       if (!url) return null;
@@ -810,7 +841,7 @@
       }
 
       // For short links (tiktok.com/t/XXX) and vm.tiktok.com/XXX:
-      // Pass the full URL to TikTok's embed endpoint — it resolves the redirect itself
+      // Pass the full URL to TikTok's embed endpoint â€” it resolves the redirect itself
       if (/tiktok\.com/i.test(clean)) {
         return `https://www.tiktok.com/embed/v2?url=${encodeURIComponent(clean)}&referrer=${encodeURIComponent(window.location.origin)}`;
       }
@@ -818,7 +849,7 @@
       return null;
     }
 
-    // ── Progress ──────────────────────────────────────────────────────────────
+    // â”€â”€ Progress â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _tickNative() {
       if (!this.nativeEl) return;
       this._updateProgress(this.nativeEl.currentTime, this.nativeEl.duration);
@@ -836,9 +867,10 @@
       if (this._progressTimer) { clearInterval(this._progressTimer); this._progressTimer = null; }
     }
 
-    // ── Teardown ──────────────────────────────────────────────────────────────
+    // â”€â”€ Teardown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _teardown() {
       this._stopProgress();
+      this.root.classList.remove('avp-root--provider-player');
       this._setPlayState(false);
       this._updateProgress(0, 0);
 
@@ -864,7 +896,7 @@
       });
     }
 
-    // ── UI helpers ────────────────────────────────────────────────────────────
+    // â”€â”€ UI helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _setPlayState(playing) {
       this.isPlaying = playing;
       this.$.play.querySelector('.avp-play-icon').style.display  = playing ? 'none' : '';
@@ -879,7 +911,7 @@
       this.$.mute.setAttribute('aria-label', this.isMuted ? 'Unmute' : 'Mute');
     }
 
-    // ── Mute toast ────────────────────────────────────────────────────────────
+    // â”€â”€ Mute toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _showMuteToast() {
       const toast = this.$.muteToast;
       if (!toast) return;
@@ -911,7 +943,7 @@
 
     _hideEmpty() { this.$.empty.style.display = 'none'; }
 
-    // ── URL helpers ───────────────────────────────────────────────────────────
+    // â”€â”€ URL helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _isYouTube(url)   { return /youtube\.com|youtu\.be/i.test(url); }
     _isTikTok(url)    { return /tiktok\.com/i.test(url); }
     _isFacebook(url)  { return /facebook\.com|fb\.watch/i.test(url); }
@@ -923,7 +955,7 @@
     }
 
     _tikTokId(url) {
-      // Legacy — kept for reference. Use _tikTokEmbedUrl() instead.
+      // Legacy â€” kept for reference. Use _tikTokEmbedUrl() instead.
       const m = url.match(/\/video\/(\d+)/);
       return m ? m[1] : null;
     }

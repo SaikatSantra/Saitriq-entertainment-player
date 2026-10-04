@@ -51,10 +51,26 @@ export const action = async ({ request }) => {
   const intent = formData.get("intent");
 
   if (intent === "saveSettings") {
-    const keys = Object.keys(DEFAULTS);
+    const values = Object.fromEntries(
+      Object.keys(DEFAULTS).map((key) => {
+        const rawValue = formData.get(key);
+        return [key, typeof rawValue === "string" ? rawValue.trim() : ""];
+      }),
+    );
+
+    if (
+      !["true", "false"].includes(values.widget_enabled) ||
+      !["bottom-left", "bottom-right", "top-left", "top-right"].includes(values.widget_position) ||
+      !values.widget_title ||
+      values.widget_title.length > 40 ||
+      !["true", "false"].includes(values.autoplay) ||
+      !["true", "false"].includes(values.loop_playlist)
+    ) {
+      return data({ success: false, error: "Invalid widget settings." }, { status: 400 });
+    }
+
     await Promise.all(
-      keys.map((key) => {
-        const value = formData.get(key) ?? DEFAULTS[key];
+      Object.entries(values).map(([key, value]) => {
         return prisma.appSettings.upsert({
           where: { shop_key: { shop, key } },
           update: { value },
@@ -210,9 +226,10 @@ export default function SettingsPage() {
           <BlockStack gap="400">
 
             <Banner tone="info" title="Theme Customizer">
-              You can also toggle this widget inside the Shopify Theme
-              Customizer under <strong>App Embeds → Audio &amp; Video
-              Playlist</strong>. Theme Customizer settings take precedence.
+              The app embed must be enabled in <strong>Online Store → Themes →
+              Customize → App Embeds → Audio &amp; Video Playlist</strong>.
+              This app&apos;s settings control widget visibility, position, and
+              playback behavior.
             </Banner>
 
             <Card>
