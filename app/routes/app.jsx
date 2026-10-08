@@ -1,8 +1,7 @@
-import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
+import { Outlet, isRouteErrorResponse, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
-import { AppProvider as PolarisAppProvider, Frame } from "@shopify/polaris";
-import enTranslations from "@shopify/polaris/locales/en.json";
+import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
@@ -13,29 +12,25 @@ export const loader = async ({ request }) => {
 
 export default function App() {
   const { apiKey } = useLoaderData();
+
   return (
-    <ShopifyAppProvider embedded apiKey={apiKey}>
-      <PolarisAppProvider i18n={enTranslations}>
-        <Frame>
-          {/*
-            s-app-nav: App Bridge component for the Shopify admin sidebar nav.
-            rel="home" hides the link from the menu and sets it as the home route.
-            Labels should be 1-2 words, noun-based per Shopify guidelines.
-          */}
-          <s-app-nav>
-            <s-link href="/app" rel="home">Dashboard</s-link>
-            <s-link href="/app/playlist">Manage Playlist</s-link>
-            <s-link href="/app/settings">Settings</s-link>
-          </s-app-nav>
-          <Outlet />
-        </Frame>
-      </PolarisAppProvider>
-    </ShopifyAppProvider>
+    <AppProvider embedded apiKey={apiKey}>
+      <NavMenu>
+        <a href="/app">Dashboard</a>
+        <a href="/app/playlist">Manage Playlist</a>
+        <a href="/app/settings">Settings</a>
+      </NavMenu>
+      <Outlet />
+    </AppProvider>
   );
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  if (isRouteErrorResponse(error)) {
+    return boundary.error(error);
+  }
+  return boundary.error(error);
 }
 
 export const headers = (headersArgs) => {
