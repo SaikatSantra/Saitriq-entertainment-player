@@ -23,6 +23,7 @@ import {
   ButtonGroup,
   useIndexResourceState,
   Icon,
+  Tabs,
 } from "@shopify/polaris";
 import { UploadIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
