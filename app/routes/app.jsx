@@ -1,7 +1,9 @@
-import { Outlet, isRouteErrorResponse, useLoaderData, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useRouteError, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { NavMenu } from "@shopify/app-bridge-react";
+import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
+import { AppProvider as PolarisAppProvider, Frame, Navigation } from "@shopify/polaris";
+import { HomeIcon, SettingsIcon, VideoIcon } from "@shopify/polaris-icons";
+import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
@@ -12,25 +14,44 @@ export const loader = async ({ request }) => {
 
 export default function App() {
   const { apiKey } = useLoaderData();
-
+  const location = useLocation();
   return (
-    <AppProvider embedded apiKey={apiKey}>
-      <NavMenu>
-        <a href="/app">Dashboard</a>
-        <a href="/app/playlist">Manage Playlist</a>
-        <a href="/app/settings">Settings</a>
-      </NavMenu>
-      <Outlet />
-    </AppProvider>
+    <ShopifyAppProvider embedded apiKey={apiKey}>
+      <PolarisAppProvider i18n={enTranslations}>
+        <Frame
+          navigation={
+            <Navigation location={location.pathname}>
+              <Navigation.Section
+                items={[
+                  {
+                    url: "/app",
+                    label: "Dashboard",
+                    icon: HomeIcon,
+                  },
+                  {
+                    url: "/app/playlist",
+                    label: "Manage Playlist",
+                    icon: VideoIcon,
+                  },
+                  {
+                    url: "/app/settings",
+                    label: "Settings",
+                    icon: SettingsIcon,
+                  },
+                ]}
+              />
+            </Navigation>
+          }
+        >
+          <Outlet />
+        </Frame>
+      </PolarisAppProvider>
+    </ShopifyAppProvider>
   );
 }
 
 export function ErrorBoundary() {
-  const error = useRouteError();
-  if (isRouteErrorResponse(error)) {
-    return boundary.error(error);
-  }
-  return boundary.error(error);
+  return boundary.error(useRouteError());
 }
 
 export const headers = (headersArgs) => {
