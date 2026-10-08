@@ -10,10 +10,7 @@ import {
   Modal,
   FormLayout,
   TextField,
-  Select,
-  Checkbox,
   EmptyState,
-  ButtonGroup,
   InlineStack,
   BlockStack,
   Thumbnail,
@@ -23,8 +20,7 @@ import {
   Banner,
   DropZone,
   Spinner,
-  Tabs,
-  ProgressBar,
+  ButtonGroup,
   useIndexResourceState,
   Icon,
 } from "@shopify/polaris";
@@ -32,7 +28,6 @@ import { UploadIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getShopPlanStatus, getPlanDetails } from "../billing.server";
 import { useState, useCallback, useEffect } from "react";
 
 // ─── GraphQL for Shopify Files upload ────────────────────────────────────────
@@ -60,13 +55,6 @@ const FILE_CREATE = `#graphql
           id fileStatus
           sources { url mimeType }
         }
-        ... on MediaImage {
-          id fileStatus
-          image { url }
-        }
-        ... on GenericFile {
-          id fileStatus url
-        }
       }
       userErrors { field message }
     }
@@ -76,16 +64,9 @@ const FILE_CREATE = `#graphql
 const FILE_STATUS_QUERY = `#graphql
   query fileStatus($id: ID!) {
     node(id: $id) {
-      ... on MediaImage {
-        id fileStatus
-        image { url }
-      }
       ... on Video {
         id fileStatus
         sources { url mimeType }
-      }
-      ... on GenericFile {
-        id fileStatus url
       }
     }
   }
@@ -102,13 +83,7 @@ function classifyFile(filename) {
   };
   if (videoMimeTypes[ext])
     return { resource: "VIDEO", mimeType: videoMimeTypes[ext], contentType: "VIDEO" };
-  if (ext === "mp3")
-    return { resource: "FILE", mimeType: "audio/mpeg", contentType: "FILE" };
-  if (ext === "wav")
-    return { resource: "FILE", mimeType: "audio/wav", contentType: "FILE" };
-  if (ext === "ogg")
-    return { resource: "FILE", mimeType: "audio/ogg", contentType: "FILE" };
-  throw new Error(`Unsupported file type: .${ext}`);
+  throw new Error(`Unsupported file type: .${ext}. Only MP4, MOV, and WebM are supported.`);
 }
 
 function classifyThumbnailFile(file) {
@@ -135,10 +110,8 @@ async function pollFileReady(admin, fileId) {
     if (!node) throw new Error("File node not found during polling");
     if (node.fileStatus === "READY") {
       const url =
-        node.image?.url ??
         node.sources?.find((s) => s.mimeType?.includes("mp4"))?.url ??
-        node.sources?.[0]?.url ??
-        node.url;
+        node.sources?.[0]?.url;
       return url;
     }
     if (node.fileStatus === "FAILED") throw new Error("Shopify file processing failed");
@@ -198,7 +171,6 @@ function readMediaFields(formData, sortOrderOverride) {
     return typeof field === "string" ? field.trim() : "";
   };
   const title = value("title");
-  const mediaType = value("mediaType");
   const sourceUrl = value("sourceUrl");
   const thumbnailUrl = value("thumbnailUrl");
   const isActive = value("isActive") === "true";
@@ -206,9 +178,6 @@ function readMediaFields(formData, sortOrderOverride) {
 
   if (!title || title.length > 120) {
     throw new Error("Title is required and must be 120 characters or fewer.");
-  }
-  if (mediaType !== "audio" && mediaType !== "video") {
-    throw new Error("Media type must be audio or video.");
   }
   let source;
   try {
@@ -236,7 +205,7 @@ function readMediaFields(formData, sortOrderOverride) {
 
   return {
     title,
-    mediaType,
+    mediaType: "video",
     sourceUrl: source.toString(),
     thumbnailUrl: thumbnailUrl || null,
     isActive,
@@ -254,20 +223,14 @@ function readMediaId(formData) {
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
-  const pricingReturn = new URL(request.url).searchParams.has("plan_handle");
-  const [mediaItems, planStatus] = await Promise.all([
-    prisma.playlistMedia.findMany({ where: { shop }, orderBy: { sortOrder: "asc" } }),
-    getShopPlanStatus(shop, prisma, admin, { forceRefresh: pricingReturn }),
-  ]);
-  const plan = getPlanDetails(planStatus.record);
+  const mediaItems = await prisma.playlistMedia.findMany({
+    where: { shop },
+    orderBy: { sortOrder: "asc" },
+  });
   return data({
     mediaItems,
     shop,
-    planId: plan.id,
-    planLimit: plan.limit,
-    planName: plan.name,
-    billingVerified: planStatus.verified,
-    billingStatusReason: planStatus.reason,
+    maxVideos: 5,
   });
 };
 
@@ -282,17 +245,13 @@ export const action = async ({ request }) => {
   try {
     // ── Upload file to Shopify Files ────────────────────────────────────────
     if (intent === "upload") {
-      // Check plan limit before uploading
-      const { record: planRecord } = await getShopPlanStatus(shop, prisma, admin);
-      const plan       = getPlanDetails(planRecord);
-      if (plan.limit !== Infinity) {
-        const count = await prisma.playlistMedia.count({ where: { shop } });
-        if (count >= plan.limit) {
-          return data(
-            { success: false, limitReached: true, planId: plan.id, limit: plan.limit },
-            { status: 403 },
-          );
-        }
+      // Check 5-video limit before uploading
+      const count = await prisma.playlistMedia.count({ where: { shop } });
+      if (count >= 5) {
+        return data(
+          { success: false, limitReached: true, limit: 5 },
+          { status: 403 },
+        );
       }
 
       const file = formData.get("file");
@@ -316,17 +275,13 @@ export const action = async ({ request }) => {
 
     // ── CRUD operations ─────────────────────────────────────────────────────
     if (intent === "create") {
-      // ── Plan limit check ───────────────────────────────────────────────────
-      const { record: planRecord } = await getShopPlanStatus(shop, prisma, admin);
-      const plan       = getPlanDetails(planRecord);
-      if (plan.limit !== Infinity) {
-        const count = await prisma.playlistMedia.count({ where: { shop } });
-        if (count >= plan.limit) {
-          return data(
-            { success: false, limitReached: true, planId: plan.id, limit: plan.limit },
-            { status: 403 },
-          );
-        }
+      // ── 5-video limit check ─────────────────────────────────────────────
+      const count = await prisma.playlistMedia.count({ where: { shop } });
+      if (count >= 5) {
+        return data(
+          { success: false, limitReached: true, limit: 5 },
+          { status: 403 },
+        );
       }
       const maxOrder = await prisma.playlistMedia.aggregate({
         where: { shop },
@@ -445,21 +400,14 @@ const EMPTY_FORM = {
   thumbnailUrl: "", isActive: true, sortOrder: 0,
 };
 
-const MEDIA_TYPE_OPTIONS = [
-  { label: "Video — YouTube, TikTok, Instagram, Facebook, .mp4", value: "video" },
-  { label: "Audio — .mp3 / .wav / stream URL", value: "audio" },
-];
-
 const FALLBACK_THUMB =
   "https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png";
 
 const ACCEPTED_MIME = {
   video: "video/mp4,video/quicktime,video/webm",
-  audio: "audio/mpeg,audio/mp3,audio/wav,audio/ogg",
 };
 const ACCEPTED_EXT = {
   video: ".mp4  .mov  .webm",
-  audio: ".mp3  .wav  .ogg",
 };
 
 function SummaryCard({ label, value, tone = "default" }) {
@@ -491,12 +439,9 @@ export default function PlaylistAdmin() {
   // loader data — single source of truth
   const {
     mediaItems,
-    planLimit,
-    planName,
-    billingVerified,
-    billingStatusReason,
+    maxVideos,
   } = useLoaderData();
-  const atLimit = planLimit !== null && planLimit !== undefined && mediaItems.length >= planLimit;
+  const atLimit = mediaItems.length >= maxVideos;
 
   // One fetcher for CRUD mutations, one dedicated fetcher for file upload
   const crudFetcher   = useFetcher({ key: "playlist-crud" });
@@ -598,10 +543,9 @@ export default function PlaylistAdmin() {
     const file = accepted[0];
     if (!file) return;
     setDroppedFile(file);
-    const isAudio = file.type.startsWith("audio/");
     setForm((p) => ({
       ...p,
-      mediaType: isAudio ? "audio" : "video",
+      mediaType: "video",
       title: p.title || file.name.replace(/\.[^.]+$/, ""),
       sourceUrl: "", // clear previous URL
     }));
@@ -618,7 +562,6 @@ export default function PlaylistAdmin() {
     const fd = new FormData();
     fd.append("intent", "upload");
     fd.append("file", droppedFile);
-    // encType multipart/form-data is automatic when FormData contains a File
     uploadFetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
   }, [droppedFile, uploadFetcher]);
 
@@ -712,41 +655,18 @@ export default function PlaylistAdmin() {
   return (
     <Page
       title="Manage Playlist"
-      subtitle={`${mediaItems.length} item${mediaItems.length !== 1 ? "s" : ""} in your playlist`}
+      subtitle={`${mediaItems.length} / ${maxVideos} video${mediaItems.length !== 1 ? "s" : ""} in your playlist`}
       backAction={{ content: "Dashboard", url: "/app" }}
     >
       <Layout>
-        {!billingVerified && (
-          <Layout.Section>
-            <Banner
-              tone="warning"
-              title="Subscription status is not verified"
-              action={{ content: "Review billing setup", url: "/app/billing" }}
-            >
-              <Text variant="bodySm">
-                {billingStatusReason} The playlist uses temporary Free limits until Shopify
-                subscription verification succeeds.
-              </Text>
-            </Banner>
-          </Layout.Section>
-        )}
-
         {atLimit && (
           <Layout.Section>
             <Banner
               tone="warning"
-              title={
-                billingVerified
-                  ? `You've reached the ${planName} plan limit (${planLimit} item${planLimit !== 1 ? "s" : ""})`
-                  : `Temporary Free limit reached (${planLimit} item${planLimit !== 1 ? "s" : ""})`
-              }
-              action={{
-                content: billingVerified ? "Upgrade plan" : "Retry billing verification",
-                url: "/app/billing?pricing=unverified",
-              }}
+              title={`You've reached the ${maxVideos} video limit`}
             >
               <Text variant="bodySm">
-                Upgrade to Pro (50 items) or Unlimited to add more media.
+                Delete a video to add a new one. This private app allows a maximum of {maxVideos} videos.
               </Text>
             </Banner>
           </Layout.Section>
@@ -764,14 +684,9 @@ export default function PlaylistAdmin() {
                   tone="success"
                 />
                 <SummaryCard
-                  label="Video"
+                  label="Videos"
                   value={mediaItems.filter((item) => item.mediaType === "video").length}
                   tone="warning"
-                />
-                <SummaryCard
-                  label="Audio"
-                  value={mediaItems.filter((item) => item.mediaType === "audio").length}
-                  tone="info"
                 />
               </InlineStack>
             </Box>
@@ -783,19 +698,19 @@ export default function PlaylistAdmin() {
             <Box padding="400">
               <InlineStack align="space-between" blockAlign="center" gap="300" wrap>
                 <BlockStack gap="050">
-                  <Text variant="headingSm" as="h2" fontWeight="semibold">Media library</Text>
+                  <Text variant="headingSm" as="h2" fontWeight="semibold">Video library</Text>
                   <Text variant="bodySm" tone="subdued">
-                    Manage the content and order shown in your storefront player.
+                    Manage the MP4 videos shown in your storefront player.
                   </Text>
                 </BlockStack>
                 <InlineStack gap="300" blockAlign="center">
                   <Badge tone="info">
-                    {mediaItems.length} {mediaItems.length === 1 ? "item" : "items"}
+                    {mediaItems.length} / {maxVideos}
                   </Badge>
                   {atLimit ? (
-                    <Button variant="primary" url="/app/billing">Upgrade to add more</Button>
+                    <Button variant="primary" disabled>Limit reached</Button>
                   ) : (
-                    <Button variant="primary" onClick={openCreate}>Add media item</Button>
+                    <Button variant="primary" onClick={openCreate}>Add video</Button>
                   )}
                 </InlineStack>
               </InlineStack>
@@ -803,20 +718,18 @@ export default function PlaylistAdmin() {
             {mediaItems.length === 0 ? (
               <EmptyState heading="Your playlist is empty" image={FALLBACK_THUMB}>
                 <Text tone="subdued">
-                  Upload .mp4 / .mp3 files to Shopify Files, or paste YouTube,
-                  TikTok, or direct media URLs.
+                  Upload MP4 files to Shopify Files, or paste direct MP4 URLs.
                 </Text>
               </EmptyState>
             ) : (
               <IndexTable
-                resourceName={{ singular: "media item", plural: "media items" }}
+                resourceName={{ singular: "video", plural: "videos" }}
                 itemCount={mediaItems.length}
                 selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
                 onSelectionChange={handleSelectionChange}
                 headings={[
                   { title: "Preview" },
                   { title: "Title" },
-                  { title: "Type" },
                   { title: "Status" },
                   { title: "Position" },
                   { title: "Actions" },
@@ -849,12 +762,6 @@ export default function PlaylistAdmin() {
                             : item.sourceUrl}
                         </Text>
                       </BlockStack>
-                    </IndexTable.Cell>
-
-                    <IndexTable.Cell>
-                      <Badge tone={item.mediaType === "audio" ? "info" : "warning"}>
-                        {item.mediaType === "audio" ? "Audio" : "Video"}
-                      </Badge>
                     </IndexTable.Cell>
 
                     <IndexTable.Cell>
@@ -911,7 +818,7 @@ export default function PlaylistAdmin() {
         <Layout.Section>
           <BlockStack gap="400">
             <Banner tone="info" title="Playlist order">
-              Items appear in the storefront widget in the order listed here.
+              Videos appear in the storefront widget in the order listed here.
               Use ↑↓ to reorder.
             </Banner>
             <Card>
@@ -923,7 +830,7 @@ export default function PlaylistAdmin() {
                 <BlockStack gap="200">
                   <Text variant="bodySm" fontWeight="medium">Paste a URL:</Text>
                   <InlineStack gap="150" wrap>
-                    {["YouTube", "TikTok", "Instagram", "Facebook", ".mp4", ".mp3"].map((s) => (
+                    {[".mp4", ".mov", ".webm"].map((s) => (
                       <Box
                         key={s}
                         background="bg-fill-secondary"
@@ -937,7 +844,7 @@ export default function PlaylistAdmin() {
                   </InlineStack>
                   <Text variant="bodySm" fontWeight="medium">Or upload a file:</Text>
                   <InlineStack gap="150" wrap>
-                    {[".mp4", ".mov", ".webm", ".mp3", ".wav", ".ogg"].map((s) => (
+                    {[".mp4", ".mov", ".webm"].map((s) => (
                       <Box
                         key={s}
                         background="bg-fill-secondary"
@@ -960,7 +867,7 @@ export default function PlaylistAdmin() {
       <Modal
         open={modalOpen}
         onClose={closeModal}
-        title={editingItem ? "Edit media item" : "Add media item"}
+        title={editingItem ? "Edit video" : "Add video"}
         primaryAction={{
           content: "Save",
           onAction: handleSubmit,
@@ -978,14 +885,8 @@ export default function PlaylistAdmin() {
               value={form.title}
               onChange={(v) => setForm((p) => ({ ...p, title: v }))}
               autoComplete="off"
-              placeholder="e.g. Summer Vibes Mix"
+              placeholder="e.g. Product Demo Video"
               requiredIndicator
-            />
-            <Select
-              label="Media type"
-              options={MEDIA_TYPE_OPTIONS}
-              value={form.mediaType}
-              onChange={(v) => setForm((p) => ({ ...p, mediaType: v, sourceUrl: "" }))}
             />
           </FormLayout>
         </Modal.Section>
@@ -1012,17 +913,9 @@ export default function PlaylistAdmin() {
                 value={form.sourceUrl}
                 onChange={(v) => setForm((p) => ({ ...p, sourceUrl: v }))}
                 autoComplete="off"
-                placeholder={
-                  form.mediaType === "video"
-                    ? "https://youtube.com/watch?v=... or .mp4 URL"
-                    : "https://example.com/track.mp3"
-                }
+                placeholder="https://example.com/video.mp4"
                 requiredIndicator
-                helpText={
-                  form.mediaType === "video"
-                    ? "YouTube, TikTok, Instagram Reel, Facebook video/reel, or a direct .mp4 / .mov URL."
-                    : "A direct .mp3, .wav, or audio stream URL."
-                }
+                helpText="A direct MP4, MOV, or WebM video URL."
               />
             </FormLayout>
           ) : (
@@ -1031,14 +924,14 @@ export default function PlaylistAdmin() {
               {/* Step A — pick file */}
               {!droppedFile ? (
                 <DropZone
-                  accept={ACCEPTED_MIME[form.mediaType]}
+                  accept={ACCEPTED_MIME.video}
                   type="file"
                   onDrop={handleDrop}
                   variableHeight
                 >
                   <DropZone.FileUpload
-                    actionTitle={`Choose ${form.mediaType} file`}
-                    actionHint={`Accepted: ${ACCEPTED_EXT[form.mediaType]}`}
+                    actionTitle="Choose video file"
+                    actionHint={`Accepted: ${ACCEPTED_EXT.video}`}
                   />
                 </DropZone>
               ) : (
@@ -1103,14 +996,13 @@ export default function PlaylistAdmin() {
                     {uploadError && (
                       <Banner tone="critical">
                         <BlockStack gap="200">
-                          <Text>{uploadData?.error || "Upload failed — please try again."}</Text>
-                          <Button
-                            variant="plain"
-                            onClick={() => {
-                              setDroppedFile(null);
-                              setForm((p) => ({ ...p, sourceUrl: "" }));
-                            }}
-                          >
+                          <Text variant="bodySm" fontWeight="medium">
+                            Upload failed
+                          </Text>
+                          <Text variant="bodySm">
+                            {uploadData?.error || "Something went wrong"}
+                          </Text>
+                          <Button size="small" onClick={handleUploadFile}>
                             Try again
                           </Button>
                         </BlockStack>
@@ -1119,108 +1011,124 @@ export default function PlaylistAdmin() {
 
                     {/* Limit reached */}
                     {uploadLimitReached && (
-                      <Banner
-                        tone="warning"
-                        title="Plan limit reached"
-                        action={{ content: "Upgrade plan", url: "/app/billing" }}
-                      >
-                        <Text variant="bodySm">You need a higher plan to add more media items.</Text>
+                      <Banner tone="warning">
+                        <Text variant="bodySm">
+                          You've reached the {maxVideos} video limit. Delete a video to add a new one.
+                        </Text>
                       </Banner>
                     )}
                   </BlockStack>
                 </Box>
               )}
-
-              <Text variant="bodySm" tone="subdued">
-                Files are stored permanently in your Shopify Files library and
-                served via Shopify&apos;s global CDN.
-              </Text>
             </BlockStack>
           )}
         </Modal.Section>
 
-        {/* Thumbnail + active */}
+        {/* Thumbnail */}
         <Modal.Section>
-          <FormLayout>
-            <TextField
-              label="Custom thumbnail URL (optional)"
-              value={form.thumbnailUrl}
-              onChange={(v) => setForm((p) => ({ ...p, thumbnailUrl: v }))}
-              autoComplete="off"
-              placeholder="https://example.com/cover.jpg"
-              helpText="Leave blank to use the auto-generated thumbnail."
-            />
-            <DropZone
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              type="image"
-              onDrop={handleThumbnailDrop}
-              disabled={thumbnailUploadFetcher.state !== "idle"}
-              variableHeight
-            >
-              <DropZone.FileUpload
-                actionTitle="Choose thumbnail image"
-                actionHint="JPEG, PNG, WebP, or GIF"
-              />
-            </DropZone>
-            {thumbnailFile && (
-              <InlineStack gap="300" blockAlign="center">
-                <Text variant="bodySm">{thumbnailFile.name}</Text>
-                <Button
-                  variant="secondary"
-                  onClick={handleUploadThumbnail}
-                  loading={thumbnailUploadFetcher.state !== "idle"}
-                  disabled={thumbnailUploadFetcher.state !== "idle"}
-                >
-                  Upload to Shopify Files
-                </Button>
-              </InlineStack>
+          <BlockStack gap="300">
+            <Text variant="headingSm" fontWeight="semibold">Thumbnail (optional)</Text>
+            {!thumbnailFile ? (
+              <DropZone
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                type="file"
+                onDrop={handleThumbnailDrop}
+                variableHeight
+              >
+                <DropZone.FileUpload
+                  actionTitle="Choose thumbnail image"
+                  actionHint="Accepted: .jpg, .png, .webp, .gif"
+                />
+              </DropZone>
+            ) : (
+              <Box background="bg-surface-secondary" borderRadius="200" padding="400">
+                <BlockStack gap="300">
+                  <InlineStack gap="300" blockAlign="center">
+                    <Icon source={UploadIcon} tone="base" />
+                    <BlockStack gap="050">
+                      <Text variant="bodyMd" fontWeight="semibold">
+                        {thumbnailFile.name}
+                      </Text>
+                      <Text variant="bodySm" tone="subdued">
+                        {(thumbnailFile.size / 1024 / 1024).toFixed(2)} MB
+                      </Text>
+                    </BlockStack>
+                    <Button
+                      size="micro"
+                      onClick={() => setThumbnailFile(null)}
+                    >
+                      Remove
+                    </Button>
+                  </InlineStack>
+
+                  {thumbnailUploadFetcher.state !== "idle" && (
+                    <InlineStack gap="200" blockAlign="center">
+                      <Spinner size="small" />
+                      <Text variant="bodySm" tone="subdued">
+                        Uploading thumbnail…
+                      </Text>
+                    </InlineStack>
+                  )}
+
+                  {thumbnailUploadFetcher.data?.success && (
+                    <Banner tone="success">
+                      ✓ Thumbnail uploaded successfully
+                    </Banner>
+                  )}
+
+                  {thumbnailUploadFetcher.data?.success === false && (
+                    <Banner tone="critical">
+                      <BlockStack gap="200">
+                        <Text variant="bodySm" fontWeight="medium">
+                          Thumbnail upload failed
+                        </Text>
+                        <Button size="small" onClick={handleUploadThumbnail}>
+                          Try again
+                        </Button>
+                      </BlockStack>
+                    </Banner>
+                  )}
+                </BlockStack>
+              </Box>
             )}
-            {thumbnailUploadFetcher.data?.success && (
-              <Banner tone="success">Thumbnail uploaded to Shopify Files.</Banner>
-            )}
-            {thumbnailUploadFetcher.data?.success === false && (
-              <Banner tone="critical">
-                {thumbnailUploadFetcher.data.error || "Thumbnail upload failed."}
-              </Banner>
-            )}
-            <Checkbox
-              label="Active — visible in the storefront widget"
-              checked={form.isActive}
-              onChange={(v) => setForm((p) => ({ ...p, isActive: v }))}
-            />
-          </FormLayout>
+          </BlockStack>
+        </Modal.Section>
+
+        {/* Active toggle */}
+        <Modal.Section>
+          <Checkbox
+            label="Active"
+            checked={form.isActive}
+            onChange={(v) => setForm((p) => ({ ...p, isActive: v }))}
+            helpText="Only active videos appear in the storefront widget."
+          />
         </Modal.Section>
       </Modal>
 
-      {/* ── Delete confirmation ────────────────────────────────────────────── */}
+      {/* ── Delete confirmation modal ───────────────────────────────────────── */}
       <Modal
         open={deleteModalOpen}
         onClose={() => setDeleteModalOpen(false)}
-        title="Delete media item?"
+        title="Delete video?"
         primaryAction={{
           content: "Delete",
-          destructive: true,
           onAction: handleDelete,
+          tone: "critical",
+          loading: isMutating,
         }}
-        secondaryActions={[
-          { content: "Cancel", onAction: () => setDeleteModalOpen(false) },
-        ]}
+        secondaryActions={[{ content: "Cancel", onAction: () => setDeleteModalOpen(false) }]}
       >
         <Modal.Section>
-          <Text>
-            This removes the item from your playlist. The file in Shopify Files
-            will not be deleted.
-          </Text>
+          <Text>Are you sure you want to delete this video? This action cannot be undone.</Text>
         </Modal.Section>
       </Modal>
 
-      {/* ── Toast ─────────────────────────────────────────────────────────── */}
+      {/* ── Toast ─────────────────────────────────────────────────────────────── */}
       {toastActive && (
         <Toast
           content={toastMessage}
-          error={toastIsError}
           onDismiss={() => setToastActive(false)}
-          duration={4000}
+          error={toastIsError}
         />
       )}
     </Page>

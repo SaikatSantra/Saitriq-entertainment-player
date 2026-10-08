@@ -1,32 +1,19 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "4a97c4086300f487693d3860b6ec0dc8"
-name = "Audio and Video Playlist"
+client_id = "9b631dfbe0715b498ebc003c871d44f9"
+name = "ire audio video player"
 application_url = "https://saitriq-entertainment-player.vercel.app"
 embedded = true
 
-[build]
-automatically_update_urls_on_dev = true
-
 [webhooks]
-api_version = "2026-10"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
+api_version = "2027-01"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_files,read_themes,write_files,write_themes,write_app_proxy"
+scopes = "read_files,read_themes,write_app_proxy,write_files,write_themes"
 
 [auth]
-redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/auth/callback" ]
+redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/api/auth" ]
 
-[app_proxy]
-url = "https://saitriq-entertainment-player.vercel.app/apps/playlist"
-subpath = "playlist"
-prefix = "apps"
+[build]
+automatically_update_urls_on_dev = true

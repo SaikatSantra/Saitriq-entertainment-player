@@ -1,7 +1,8 @@
 {%- comment -%}
-  Audio & Video Playlist — App Embed Block
+  Video Playlist — App Embed Block
   Floating widget: card-stack player with controls overlaid on the video.
   No header bar. Transport + progress sit directly on top of the card.
+  MP4 videos only.
 {%- endcomment -%}
 
 {%- assign widget_enabled  = block.settings.widget_enabled -%}
@@ -120,7 +121,7 @@
 
 {% schema %}
 {
-  "name": "Audio & Video Playlist",
+  "name": "Video Playlist",
   "target": "body",
   "settings": [
     {
@@ -162,7 +163,7 @@
       "id": "loop_playlist",
       "label": "Loop playlist",
       "default": true,
-      "info": "Return to the first track after the last one finishes."
+      "info": "Return to the first video after the last one finishes."
     }
   ]
 }

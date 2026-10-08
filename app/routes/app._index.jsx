@@ -7,18 +7,14 @@ import { QuestionCircleIcon } from "@shopify/polaris-icons";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getShopPlanStatus, getPlanDetails } from "../billing.server";
 
 // ─── Loader — single round-trip ───────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const url = new URL(request.url);
-  const pricingReturnPlanHandle = url.searchParams.get("plan_handle");
-  const pricingReturn = Boolean(pricingReturnPlanHandle);
 
-  const [mediaSummary, widgetSetting, planStatus, recentItems] = await Promise.all([
+  const [mediaSummary, widgetSetting, recentItems] = await Promise.all([
     prisma.playlistMedia.groupBy({
       by: ["mediaType", "isActive"],
       where: { shop },
@@ -28,7 +24,6 @@ export const loader = async ({ request }) => {
       where: { shop_key: { shop, key: "widget_enabled" } },
       select: { value: true },
     }),
-    getShopPlanStatus(shop, prisma, admin, { forceRefresh: pricingReturn }),
     prisma.playlistMedia.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
@@ -37,27 +32,21 @@ export const loader = async ({ request }) => {
     }),
   ]);
 
-  let totalMedia = 0, activeMedia = 0, audioCount = 0, videoCount = 0;
+  let totalMedia = 0, activeMedia = 0, videoCount = 0;
   for (const row of mediaSummary) {
     totalMedia  += row._count;
     if (row.isActive)              activeMedia += row._count;
-    if (row.mediaType === "audio") audioCount  += row._count;
     if (row.mediaType === "video") videoCount  += row._count;
   }
 
   const widgetEnabled = widgetSetting ? widgetSetting.value === "true" : true;
-  const plan          = getPlanDetails(planStatus.record);
 
   return data({
     shop,
-    stats: { totalMedia, activeMedia, audioCount, videoCount },
+    stats: { totalMedia, activeMedia, videoCount },
     widgetEnabled,
     recentItems,
-    billingVerified: planStatus.verified,
-    billingStatusReason: planStatus.reason,
-    pricingReturnPlanHandle,
-    // Infinity → null for JSON serialisation; component handles null as "unlimited"
-    plan: { id: plan.id, name: plan.name, price: plan.price, limit: plan.limit === Infinity ? null : plan.limit },
+    maxVideos: 5,
   });
 };
 
@@ -111,19 +100,15 @@ export default function Dashboard() {
     stats,
     widgetEnabled,
     recentItems,
-    plan,
-    billingVerified,
-    billingStatusReason,
-    pricingReturnPlanHandle,
+    maxVideos,
   } = useLoaderData();
   const hasItems = stats.totalMedia > 0;
-  // plan.limit is null for UNLIMITED (serialised from Infinity); null = no cap
-  const atLimit  = plan.limit !== null && stats.totalMedia >= plan.limit;
+  const atLimit = stats.totalMedia >= maxVideos;
 
   return (
     <Page
-      title="Audio & Video Playlist"
-      subtitle="Floating media playlist widget for your Shopify storefront"
+      title="Video Playlist"
+      subtitle="Floating video playlist widget for your Shopify storefront"
       primaryAction={<Button variant="primary" url="/app/playlist">Manage Playlist</Button>}
       secondaryActions={[{ content: "Settings", url: "/app/settings" }]}
     >
@@ -153,41 +138,15 @@ export default function Dashboard() {
           </Banner>
         </Layout.Section>
 
-        {!billingVerified && (
-          <Layout.Section>
-            <Banner
-              tone="warning"
-              title="Subscription status is not verified"
-              action={{ content: "Review billing setup", url: "/app/billing" }}
-            >
-              <Text variant="bodySm">
-                {billingStatusReason} The app applies temporary Free limits until it can verify
-                the Shopify subscription.
-                {pricingReturnPlanHandle && (
-                  <> Shopify returned plan handle <code>{pricingReturnPlanHandle}</code>; this is not yet verified.</>
-                )}
-              </Text>
-            </Banner>
-          </Layout.Section>
-        )}
-
-        {/* Plan limit warning */}
+        {/* 5-video limit warning */}
         {atLimit && (
           <Layout.Section>
             <Banner
               tone="warning"
-              title={
-                billingVerified
-                  ? `You've reached the ${plan.name} plan limit of ${plan.limit} item${plan.limit !== 1 ? "s" : ""}`
-                  : `Temporary Free limit reached (${plan.limit} item${plan.limit !== 1 ? "s" : ""})`
-              }
-              action={{
-                content: billingVerified ? "Upgrade plan" : "Retry billing verification",
-                url: "/app/billing?pricing=unverified",
-              }}
+              title={`You've reached the ${maxVideos} video limit`}
             >
               <Text variant="bodySm">
-                Upgrade to Pro ($5/mo, 50 items) or Unlimited ($50/mo) to keep adding media.
+                Delete a video to add a new one. This private app allows a maximum of {maxVideos} videos.
               </Text>
             </Banner>
           </Layout.Section>
@@ -200,9 +159,8 @@ export default function Dashboard() {
               <Text variant="headingSm" fontWeight="semibold">Overview</Text>
               <Divider />
               <InlineStack gap="400" wrap>
-                <StatCard value={stats.totalMedia}  label="Total items" />
+                <StatCard value={stats.totalMedia}  label={`Total videos (${maxVideos} max)`} />
                 <StatCard value={stats.activeMedia} label="Active"       tone="success" />
-                <StatCard value={stats.audioCount}  label="Audio"        tone="info" />
                 <StatCard value={stats.videoCount}  label="Video"        tone="warning" />
               </InlineStack>
             </BlockStack>
@@ -220,9 +178,9 @@ export default function Dashboard() {
               <Divider />
               <Step
                 number="1"
-                title="Add media items to your playlist"
-                description="Paste YouTube, TikTok, Instagram, Facebook, or direct .mp4/.mp3 URLs — or upload files directly to Shopify Files."
-                action={{ label: "Add media item", url: "/app/playlist", primary: true }}
+                title="Add MP4 videos to your playlist"
+                description="Paste direct .mp4 URLs or upload files directly to Shopify Files."
+                action={{ label: "Add video", url: "/app/playlist", primary: true }}
               />
               <Step
                 number="2"
@@ -232,7 +190,7 @@ export default function Dashboard() {
               <Step
                 number="3"
                 title="Configure widget settings"
-                description="Choose position, accent colour, and loop behaviour."
+                description="Choose position, autoplay, and loop behaviour."
                 action={{ label: "Open settings", url: "/app/settings" }}
               />
               <Step
@@ -260,8 +218,8 @@ export default function Dashboard() {
                     <Box key={item.id} background="bg-surface-secondary" borderRadius="200" padding="300">
                       <InlineStack align="space-between" blockAlign="center" gap="300">
                         <InlineStack gap="300" blockAlign="center">
-                          <Badge tone={item.mediaType === "audio" ? "info" : "warning"}>
-                            {item.mediaType === "audio" ? "Audio" : "Video"}
+                          <Badge tone="warning">
+                            Video
                           </Badge>
                           <Text variant="bodyMd" fontWeight="medium">{item.title}</Text>
                         </InlineStack>
@@ -281,46 +239,13 @@ export default function Dashboard() {
         <Layout.Section variant="oneThird">
           <BlockStack gap="400">
 
-            {/* Current plan */}
-            <Card>
-              <BlockStack gap="300">
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="headingSm" fontWeight="semibold">Current plan</Text>
-                  <Badge tone={!billingVerified ? "attention" : plan.id === "FREE" ? "info" : plan.id === "PRO" ? "warning" : "success"}>
-                    {billingVerified ? plan.name : "Unverified"}
-                  </Badge>
-                </InlineStack>
-                <Divider />
-                <BlockStack gap="150">
-                  <InlineStack align="space-between">
-                    <Text variant="bodySm" tone="subdued">Media items used</Text>
-                    <Text variant="bodySm" fontWeight="medium">
-                      {stats.totalMedia} / {plan.limit === null ? "∞" : plan.limit}
-                      {!billingVerified && " (temporary Free limit)"}
-                    </Text>
-                  </InlineStack>
-                  <InlineStack align="space-between">
-                    <Text variant="bodySm" tone="subdued">Price</Text>
-                    <Text variant="bodySm" fontWeight="medium">
-                      {!billingVerified ? "Not verified" : plan.price === 0 ? "Free" : `$${plan.price}/mo`}
-                    </Text>
-                  </InlineStack>
-                </BlockStack>
-                {atLimit ? (
-                  <Button variant="primary" url="/app/billing" fullWidth>Upgrade plan</Button>
-                ) : (
-                  <Button url="/app/billing" fullWidth>View plans</Button>
-                )}
-              </BlockStack>
-            </Card>
-
             {/* Quick actions */}
             <Card>
               <BlockStack gap="300">
                 <Text variant="headingSm" fontWeight="semibold">Quick actions</Text>
                 <Divider />
                 <BlockStack gap="200">
-                  <Button variant="primary" url="/app/playlist" fullWidth>+ Add media item</Button>
+                  <Button variant="primary" url="/app/playlist" fullWidth>+ Add video</Button>
                   <Button url="/app/settings" fullWidth>Widget settings</Button>
                 </BlockStack>
               </BlockStack>
@@ -334,7 +259,7 @@ export default function Dashboard() {
                 <BlockStack gap="200">
                   <Text variant="bodySm" fontWeight="medium">Paste a URL:</Text>
                   <InlineStack gap="150" wrap>
-                    {["YouTube", "TikTok", "Instagram", "Facebook", ".mp4", ".mp3"].map((s) => (
+                    {[".mp4", ".mov", ".webm"].map((s) => (
                       <Box key={s} background="bg-fill-secondary" borderRadius="200" paddingInline="200" paddingBlock="100">
                         <Text variant="bodySm" fontWeight="medium">{s}</Text>
                       </Box>
@@ -342,7 +267,7 @@ export default function Dashboard() {
                   </InlineStack>
                   <Text variant="bodySm" fontWeight="medium">Upload a file:</Text>
                   <InlineStack gap="150" wrap>
-                    {[".mp4", ".mov", ".webm", ".mp3", ".wav", ".ogg"].map((s) => (
+                    {[".mp4", ".mov", ".webm"].map((s) => (
                       <Box key={s} background="bg-fill-secondary" borderRadius="200" paddingInline="200" paddingBlock="100">
                         <Text variant="bodySm" fontWeight="medium">{s}</Text>
                       </Box>
