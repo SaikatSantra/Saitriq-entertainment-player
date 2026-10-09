@@ -254,7 +254,7 @@
         const restored = this._restorePlaybackState();
 
         if (!restored && !this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
-          this.isMuted = true;
+          this.isMuted = false;
           this._updateMuteBtn();
           this.playAt(0);
         }
@@ -458,6 +458,7 @@
     }
 
     _toggleMute() {
+      this._disarmAutoUnmute();
       this.isMuted = !this.isMuted;
       if (this.nativeEl) this.nativeEl.muted = this.isMuted;
       this._updateMuteBtn();
@@ -529,8 +530,12 @@
       try {
         await video.play();
         this._updateMuteBtn();
-        if (this.isMuted) this._showMuteToast();
-        else this._hideMuteToast();
+        if (this.isMuted) {
+          this._showMuteToast();
+          this._armAutoUnmute();
+        } else {
+          this._hideMuteToast();
+        }
       } catch (err) {
         if (err.name === 'NotAllowedError' && !this.isMuted) {
           // Browser blocked unmuted autoplay — retry muted
@@ -541,6 +546,7 @@
           try {
             await video.play();
             this._showMuteToast();  // playing muted — tell the user
+            this._armAutoUnmute();
           } catch (err2) {
             // All autoplay blocked — show play button
             console.info('[AVP] All video autoplay blocked:', err2.name);
@@ -577,6 +583,7 @@
 
     // ─── Teardown ───────────────────────────────────────────────────────────────────
     _teardown() {
+      this._disarmAutoUnmute();
       this._stopProgress();
       this._setPlayState(false);
       this._updateProgress(0, 0);
@@ -636,6 +643,53 @@
       this.$.mute.querySelector('.avp-mute-icon').style.display = this.isMuted ? ''     : 'none';
       this.$.mute.setAttribute('aria-pressed', String(this.isMuted));
       this.$.mute.setAttribute('aria-label', this.isMuted ? 'Unmute' : 'Mute');
+    }
+
+    // ─── Auto-unmute on first user interaction ─────────────────────────────────
+    _armAutoUnmute() {
+      if (this._autoUnmuteArmed) return;
+      this._autoUnmuteArmed = true;
+
+      const triggerUnmute = (e) => {
+        // If the user clicked specifically the mute button, let _toggleMute handle it
+        if (e.target && e.target.closest && e.target.closest('#avp-mute')) {
+          this._disarmAutoUnmute();
+          return;
+        }
+
+        this._disarmAutoUnmute();
+
+        if (this.nativeEl && this.isMuted) {
+          try {
+            this.nativeEl.muted = false;
+            this.isMuted = false;
+            this._updateMuteBtn();
+            this._hideMuteToast();
+            this._persistPlaybackState(true);
+          } catch (err) {
+            console.warn('[AVP] Auto-unmute error:', err);
+          }
+        }
+      };
+
+      this._autoUnmuteHandler = triggerUnmute;
+
+      const events = ['click', 'pointerdown', 'touchstart', 'keydown'];
+      events.forEach((evt) => {
+        document.addEventListener(evt, triggerUnmute, { capture: true, passive: true });
+      });
+    }
+
+    _disarmAutoUnmute() {
+      if (!this._autoUnmuteArmed) return;
+      this._autoUnmuteArmed = false;
+      if (this._autoUnmuteHandler) {
+        const events = ['click', 'pointerdown', 'touchstart', 'keydown'];
+        events.forEach((evt) => {
+          document.removeEventListener(evt, this._autoUnmuteHandler, { capture: true });
+        });
+        this._autoUnmuteHandler = null;
+      }
     }
 
     // ─── Mute toast ─────────────────────────────────────────────────────────────
