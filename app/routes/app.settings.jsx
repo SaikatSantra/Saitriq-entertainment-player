@@ -1,4 +1,4 @@
-import { useLoaderData, useFetcher, data } from "react-router";
+import { useLoaderData, useFetcher, useRouteError, data } from "react-router";
 import {
   Page,
   Layout,
@@ -283,3 +283,7 @@ export default function SettingsPage() {
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}

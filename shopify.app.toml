@@ -15,5 +15,10 @@ scopes = "read_files,read_themes,write_app_proxy,write_files,write_themes"
 [auth]
 redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/api/auth" ]
 
+[app_proxy]
+url = "https://saitriq-entertainment-player.vercel.app/apps/playlist/api/media"
+subpath = "playlist"
+prefix = "apps"
+
 [build]
 automatically_update_urls_on_dev = true

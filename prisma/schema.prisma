@@ -10,10 +10,16 @@ generator client {
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+// For production use, uncomment and configure:
+ datasource db {
+   provider = "postgresql"
+   url      = env("DATABASE_URL")/
+ }
+
+//datasource db {
+  //provider = "sqlite"
+  //url      = "file:dev.sqlite"
+//}
 
 model Session {
   id            String    @id

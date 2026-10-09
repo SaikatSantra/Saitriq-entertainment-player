@@ -1,4 +1,4 @@
-import { useLoaderData, data } from "react-router";
+import { useLoaderData, useRouteError, data } from "react-router";
 import {
   Page, Layout, Card, Text, Badge, Button,
   BlockStack, InlineStack, Divider, Box, Banner, Icon,
@@ -320,3 +320,7 @@ export default function Dashboard() {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}

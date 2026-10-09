@@ -1,4 +1,4 @@
-﻿import { useLoaderData, useFetcher, data } from "react-router";
+﻿import { useLoaderData, useFetcher, useRouteError, data } from "react-router";
 import {
   Page,
   Layout,
@@ -23,7 +23,6 @@ import {
   ButtonGroup,
   useIndexResourceState,
   Icon,
-  Tabs,
   ProgressBar,
   Checkbox,
 } from "@shopify/polaris";
@@ -224,32 +223,28 @@ function readMediaId(formData) {
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  try {
-    const { session, admin } = await authenticate.admin(request);
-    const shop = session.shop;
-    const mediaItems = await prisma.playlistMedia.findMany({
-      where: { shop },
-      orderBy: { sortOrder: "asc" },
-    });
-    return data({
-      mediaItems,
-      shop,
-      maxVideos: 5,
-    });
-  } catch (error) {
-    console.error("Playlist loader error:", error);
-    throw error;
-  }
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const mediaItems = await prisma.playlistMedia.findMany({
+    where: { shop },
+    orderBy: { sortOrder: "asc" },
+  });
+  return data({
+    mediaItems,
+    shop,
+    maxVideos: 5,
+  });
 };
 
 // ─── Action ───────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }) => {
+  let intent = null;
   try {
     const { session, admin } = await authenticate.admin(request);
     const shop = session.shop;
     const formData = await request.formData();
-    const intent = formData.get("intent");
+    intent = formData.get("intent");
     // ── Upload file to Shopify Files ────────────────────────────────────────
     if (intent === "upload") {
       // Check 5-video limit before uploading
@@ -652,12 +647,8 @@ export default function PlaylistAdmin() {
     !isUploading &&
     thumbnailUploadFetcher.state === "idle";
 
-  const sourceTabs = [
-    { id: "url",    content: "Paste URL"   },
-    { id: "upload", content: "Upload file" },
-  ];
 
-  // ── Render ────────────────────────────────────────────────────────────────
+
 
   return (
     <Page
@@ -898,17 +889,33 @@ export default function PlaylistAdmin() {
           </FormLayout>
         </Modal.Section>
 
-        {/* Source tabs */}
+        {/* Source toggle */}
         <Modal.Section>
-          <Tabs
-            tabs={sourceTabs}
-            selected={sourceTab}
-            onSelect={(i) => {
-              setSourceTab(i);
-              setDroppedFile(null);
-              setForm((p) => ({ ...p, sourceUrl: "" }));
-            }}
-          />
+          <BlockStack gap="200">
+            <Text variant="bodySm" tone="subdued">Video source</Text>
+            <ButtonGroup variant="segmented">
+              <Button
+                pressed={sourceTab === 0}
+                onClick={() => {
+                  setSourceTab(0);
+                  setDroppedFile(null);
+                  setForm((p) => ({ ...p, sourceUrl: "" }));
+                }}
+              >
+                Paste URL
+              </Button>
+              <Button
+                pressed={sourceTab === 1}
+                onClick={() => {
+                  setSourceTab(1);
+                  setDroppedFile(null);
+                  setForm((p) => ({ ...p, sourceUrl: "" }));
+                }}
+              >
+                Upload file
+              </Button>
+            </ButtonGroup>
+          </BlockStack>
         </Modal.Section>
 
         <Modal.Section>
@@ -1145,3 +1152,7 @@ export default function PlaylistAdmin() {
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
