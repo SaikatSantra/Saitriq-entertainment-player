@@ -13,7 +13,7 @@ generator client {
 // For production use, uncomment and configure:
  datasource db {
    provider = "postgresql"
-   url      = env("DATABASE_URL")/
+   url      = env("DATABASE_URL")
  }
 
 //datasource db {
