@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Video Playlist Widget — Storefront Player (MP4 only)
  *
  * Behaviour:
@@ -65,6 +65,7 @@
       this.root        = root;
       this.loop        = root.dataset.loop !== 'false';
       this.accentColor = root.dataset.accent || '#667eea';
+      this.shop        = (root.dataset.shop || (window.Shopify && window.Shopify.shop) || '').toLowerCase();
       this.autoplay    = false;
       this.skipAutoplay = opts.skipAutoplay || false;
 
@@ -189,12 +190,23 @@
     // ─── Load playlist then autoplay unmuted ─────────────────────────────────────
     async _loadPlaylist() {
       try {
-        // Shopify adds and signs the app-proxy query parameters, including shop.
+        const shop = this.shop || (window.Shopify && window.Shopify.shop) || '';
         const target = new URL('/apps/playlist/api/media', window.location.origin);
+        if (shop) target.searchParams.set('shop', shop);
 
-        const res = await fetch(target.toString(), {
+        let res = await fetch(target.toString(), {
           headers: { 'Accept': 'application/json' },
         });
+
+        // Fail-safe: If Shopify App Proxy returns 404, fall back to direct app API
+        if (!res.ok && shop) {
+          console.warn('[AVP] App Proxy returned HTTP ' + res.status + ', trying direct fallback...');
+          const fallbackUrl = new URL('https://saitriq-entertainment-player.vercel.app/api/media');
+          fallbackUrl.searchParams.set('shop', shop);
+          res = await fetch(fallbackUrl.toString(), {
+            headers: { 'Accept': 'application/json' },
+          });
+        }
 
         if (!res.ok) {
           const body = await res.text().catch(() => '');

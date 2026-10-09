@@ -29,13 +29,19 @@ export const action = async () => {
 };
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
+  let session = null;
+  try {
+    const authResult = await authenticate.public.appProxy(request);
+    session = authResult?.session;
+  } catch (authErr) {
+    console.warn("[appProxy auth notice]:", authErr?.message || authErr);
+  }
 
   try {
     const url = new URL(request.url);
-    const shop = (session?.shop || url.searchParams.get("shop") || "").toLowerCase();
+    let shop = (session?.shop || url.searchParams.get("shop") || "").toLowerCase().trim();
 
-    if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
+    if (!shop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
       return jsonResp({ success: false, error: "Invalid shop domain" }, 400);
     }
 
