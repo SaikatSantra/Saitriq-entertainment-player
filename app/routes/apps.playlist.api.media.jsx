@@ -1,4 +1,4 @@
-﻿/**
+/**
  * App Proxy endpoint — served via Shopify's storefront proxy.
  */
 
@@ -19,6 +19,7 @@ function jsonResp(body, status = 200) {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "private, no-store",
+      "Access-Control-Allow-Origin": "*",
     },
   });
 }

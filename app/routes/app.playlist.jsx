@@ -1,4 +1,4 @@
-﻿import { useLoaderData, useFetcher, useRouteError, data } from "react-router";
+import { useLoaderData, useFetcher, useRouteError, data } from "react-router";
 import {
   Page,
   Layout,
@@ -245,9 +245,69 @@ export const action = async ({ request }) => {
     const shop = session.shop;
     const formData = await request.formData();
     intent = formData.get("intent");
-    // ── Upload file to Shopify Files ────────────────────────────────────────
+    // ── Direct Staged Upload to Shopify (bypasses Vercel 4.5MB limit) ──────
+    if (intent === "stageUpload") {
+      const count = await prisma.playlistMedia.count({ where: { shop } });
+      if (count >= 5) {
+        return data(
+          { success: false, limitReached: true, limit: 5 },
+          { status: 403 },
+        );
+      }
+
+      const filename = formData.get("filename");
+      const fileSize = formData.get("fileSize");
+      const classification = classifyFile(filename);
+
+      const stageRes = await admin.graphql(STAGED_UPLOADS_CREATE, {
+        variables: {
+          input: [{
+            filename,
+            mimeType: classification.mimeType,
+            resource: classification.resource,
+            fileSize: String(fileSize),
+            httpMethod: "POST",
+          }],
+        },
+      });
+      const stageJson = await stageRes.json();
+      const stagedUpload = stageJson.data?.stagedUploadsCreate;
+      const stageErrors = stagedUpload?.userErrors ?? [];
+      if (stageErrors.length) throw new Error(stageErrors.map((e) => e.message).join(", "));
+      if (!stagedUpload?.stagedTargets?.[0]) {
+        throw new Error("Shopify did not return a staged upload target.");
+      }
+
+      return data({
+        success: true,
+        target: stagedUpload.stagedTargets[0],
+        classification,
+      });
+    }
+
+    if (intent === "completeUpload") {
+      const filename = formData.get("filename");
+      const resourceUrl = formData.get("resourceUrl");
+      const contentType = formData.get("contentType");
+
+      const createResponse = await admin.graphql(FILE_CREATE, {
+        variables: {
+          files: [{ filename, contentType, originalSource: resourceUrl }],
+        },
+      });
+      const createJson = await createResponse.json();
+      const createPayload = createJson.data?.fileCreate;
+      const createErrors = createPayload?.userErrors ?? [];
+      if (createErrors.length) throw new Error(createErrors.map((e) => e.message).join(", "));
+      const createdFile = createPayload?.files?.[0];
+      if (!createdFile) throw new Error("Shopify did not return the uploaded file.");
+
+      const cdnUrl = await pollFileReady(admin, createdFile.id);
+      return data({ success: true, url: cdnUrl });
+    }
+
+    // Fallback standard upload for small files
     if (intent === "upload") {
-      // Check 5-video limit before uploading
       const count = await prisma.playlistMedia.count({ where: { shop } });
       if (count >= 5) {
         return data(
@@ -471,8 +531,9 @@ export default function PlaylistAdmin() {
     setToastActive(true);
   }, []);
 
-  // ── Upload state (derived from uploadFetcher) ─────────────────────────────
-  const isUploading = uploadFetcher.state !== "idle";
+  // ── Upload state (derived from uploadFetcher and direct upload) ─────────
+  const [isDirectUploading, setIsDirectUploading] = useState(false);
+  const isUploading = uploadFetcher.state !== "idle" || isDirectUploading;
   const uploadData  = uploadFetcher.data;
   const uploadDone  = uploadData?.success === true;
   const uploadError = uploadData?.success === false && !uploadData?.limitReached;
@@ -557,15 +618,55 @@ export default function PlaylistAdmin() {
     setThumbnailFile(accepted[0] ?? null);
   }, []);
 
-  // ── Upload to Shopify Files (via authenticated action) ────────────────────
-
-  const handleUploadFile = useCallback(() => {
+  // ── Upload to Shopify Files (via direct staged upload to bypass Vercel limits) ────
+  const handleUploadFile = useCallback(async () => {
     if (!droppedFile) return;
-    const fd = new FormData();
-    fd.append("intent", "upload");
-    fd.append("file", droppedFile);
-    uploadFetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
-  }, [droppedFile, uploadFetcher]);
+
+    try {
+      setIsDirectUploading(true);
+
+      // 1. Request pre-signed staged upload target from app backend
+      const stageFd = new FormData();
+      stageFd.append("intent", "stageUpload");
+      stageFd.append("filename", droppedFile.name);
+      stageFd.append("fileSize", String(droppedFile.size));
+
+      const stageRes = await fetch("/app/playlist", { method: "POST", body: stageFd });
+      const stageData = await stageRes.json();
+
+      if (!stageData.success) {
+        showToast(stageData.error || "Failed to start upload", true);
+        setIsDirectUploading(false);
+        return;
+      }
+
+      const { target, classification } = stageData;
+
+      // 2. Upload file directly from browser to Shopify CDN (bypasses Vercel 4.5MB limit!)
+      const uploadForm = new FormData();
+      target.parameters.forEach(({ name, value }) => uploadForm.append(name, value));
+      uploadForm.append("file", droppedFile);
+
+      const s3Response = await fetch(target.url, { method: "POST", body: uploadForm });
+      if (!s3Response.ok) {
+        throw new Error(`Upload to Shopify storage failed (HTTP ${s3Response.status})`);
+      }
+
+      // 3. Register file in Shopify via uploadFetcher
+      const completeFd = new FormData();
+      completeFd.append("intent", "completeUpload");
+      completeFd.append("filename", droppedFile.name);
+      completeFd.append("resourceUrl", target.resourceUrl);
+      completeFd.append("contentType", classification.contentType);
+
+      uploadFetcher.submit(completeFd, { method: "POST" });
+    } catch (err) {
+      console.error(err);
+      showToast(err.message || "Upload failed", true);
+    } finally {
+      setIsDirectUploading(false);
+    }
+  }, [droppedFile, uploadFetcher, showToast]);
 
   const handleUploadThumbnail = useCallback(() => {
     if (!thumbnailFile) return;
