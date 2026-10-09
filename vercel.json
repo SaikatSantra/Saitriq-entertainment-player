@@ -2,20 +2,10 @@
   "version": 2,
   "buildCommand": "npm run build:deploy",
   "installCommand": "npm ci",
-  "functions": {
-    "api/index.mjs": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  },
   "rewrites": [
     {
-      "source": "/build/client/(.*)",
-      "destination": "/build/client/$1"
-    },
-    {
       "source": "/(.*)",
-      "destination": "/api/index.mjs"
+      "destination": "/api"
     }
   ]
 }
