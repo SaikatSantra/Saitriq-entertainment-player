@@ -1,4 +1,4 @@
-import { useLoaderData, useRouteError, data } from "react-router";
+import { useLoaderData, useRouteError, isRouteErrorResponse, data } from "react-router";
 import {
   Page, Layout, Card, Text, Badge, Button,
   BlockStack, InlineStack, Divider, Box, Banner, Icon,
@@ -11,8 +11,9 @@ import prisma from "../db.server";
 // ─── Loader — single round-trip ───────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  try {
+    const { session } = await authenticate.admin(request);
+    const shop = session.shop;
 
   const [mediaSummary, widgetSetting, recentItems] = await Promise.all([
     prisma.playlistMedia.groupBy({
@@ -41,13 +42,28 @@ export const loader = async ({ request }) => {
 
   const widgetEnabled = widgetSetting ? widgetSetting.value === "true" : true;
 
-  return data({
-    shop,
-    stats: { totalMedia, activeMedia, videoCount },
-    widgetEnabled,
-    recentItems,
-    maxVideos: 5,
-  });
+    return data({
+      shop,
+      stats: { totalMedia, activeMedia, videoCount },
+      widgetEnabled,
+      recentItems,
+      maxVideos: 5,
+    });
+  } catch (error) {
+    if (error instanceof Response) {
+      throw error;
+    }
+    console.error("APP INDEX LOADER ERROR:", error);
+    throw new Response(
+      JSON.stringify({
+        message: error?.message || "Unknown error",
+        name: error?.name,
+        stack: error?.stack,
+        code: error?.code,
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -324,11 +340,23 @@ export const headers = (headersArgs) => boundary.headers(headersArgs);
 export function ErrorBoundary() {
   const error = useRouteError();
   console.error("APP INDEX ERROR:", error);
+  let errorDetails = "";
+  if (isRouteErrorResponse(error)) {
+    try {
+      const parsed = typeof error.data === "string" ? JSON.parse(error.data) : error.data;
+      errorDetails = JSON.stringify(parsed, null, 2);
+    } catch {
+      errorDetails = String(error.data);
+    }
+  } else {
+    errorDetails = error?.stack || error?.message || (typeof error === "object" ? JSON.stringify(error, Object.getOwnPropertyNames(error), 2) : String(error));
+  }
+
   return (
     <div style={{ padding: "40px", fontFamily: "sans-serif" }}>
       <h2 style={{ color: "#d72c0d" }}>⚠️ Dashboard Index Error</h2>
       <pre style={{ background: "#f1f2f3", padding: "16px", borderRadius: "8px", overflow: "auto", whiteSpace: "pre-wrap" }}>
-        {error?.stack || error?.message || (typeof error === "object" ? JSON.stringify(error, Object.getOwnPropertyNames(error), 2) : String(error))}
+        {errorDetails}
       </pre>
     </div>
   );
