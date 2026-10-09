@@ -97,11 +97,15 @@
         time:         root.querySelector('#avp-time'),
         drawerToggle: root.querySelector('#avp-drawer-toggle'),
         trackList:    root.querySelector('#avp-track-list'),
+        fabMusic:     root.querySelector('.avp-fab-icon--music'),
+        fabClose:     root.querySelector('.avp-fab-icon--close'),
+        fabEqualizer: root.querySelector('#avp-fab-equalizer'),
       };
 
       this._applyAccent();
       this._bindUI();
       this._updateMuteBtn();
+      this._updateFabState();
 
       // Open panel on page load — unless the user already closed it this session
       this.$.panel.style.transition = 'none';
@@ -173,9 +177,7 @@
       panel.classList.toggle('avp-panel--open', this.panelOpen);
       panel.setAttribute('aria-hidden', String(!this.panelOpen));
       fab.setAttribute('aria-expanded', String(this.panelOpen));
-      fab.setAttribute('aria-label', this.panelOpen ? 'Close playlist' : 'Open playlist');
-      fab.querySelector('.avp-fab-icon--music').style.display = this.panelOpen ? 'none' : '';
-      fab.querySelector('.avp-fab-icon--close').style.display = this.panelOpen ? ''     : 'none';
+      this._updateFabState();
 
       // Remember user preference for this browser session:
       // closed → don't auto-open on next page navigation
@@ -574,6 +576,33 @@
       this.$.play.querySelector('.avp-play-icon').style.display  = playing ? 'none' : '';
       this.$.play.querySelector('.avp-pause-icon').style.display = playing ? ''     : 'none';
       this.$.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+      this._updateFabState();
+    }
+
+    _updateFabState() {
+      const { fab, fabMusic, fabClose, fabEqualizer } = this.$;
+      if (!fab) return;
+
+      if (this.panelOpen) {
+        if (fabMusic) fabMusic.style.display = 'none';
+        if (fabEqualizer) fabEqualizer.style.display = 'none';
+        if (fabClose) fabClose.style.display = '';
+        fab.classList.remove('avp-fab--playing');
+        fab.setAttribute('aria-label', 'Close playlist');
+      } else {
+        if (fabClose) fabClose.style.display = 'none';
+        if (this.isPlaying) {
+          if (fabMusic) fabMusic.style.display = 'none';
+          if (fabEqualizer) fabEqualizer.style.display = 'flex';
+          fab.classList.add('avp-fab--playing');
+          fab.setAttribute('aria-label', 'Playing - Open playlist');
+        } else {
+          if (fabEqualizer) fabEqualizer.style.display = 'none';
+          if (fabMusic) fabMusic.style.display = '';
+          fab.classList.remove('avp-fab--playing');
+          fab.setAttribute('aria-label', 'Open playlist');
+        }
+      }
     }
 
     _updateMuteBtn() {
