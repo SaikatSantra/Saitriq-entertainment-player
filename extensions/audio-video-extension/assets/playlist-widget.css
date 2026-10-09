@@ -560,3 +560,25 @@
 @media (prefers-reduced-motion: reduce) {
   .avp-mute-toast { transition: none !important; animation: none !important; }
 }
+
+/* ── Seamless SPA Page Navigation Bar ───────────────────────────────────── */
+.avp-spa-bar {
+  position:   fixed;
+  top:        0;
+  left:       0;
+  height:     3px;
+  width:      0%;
+  background: linear-gradient(90deg, var(--avp-accent, #667eea), var(--avp-accent-2, #764ba2));
+  z-index:    2147483647;
+  pointer-events: none;
+  transition: width 0.35s cubic-bezier(0.1, 0.9, 0.2, 1), opacity 0.25s ease;
+  opacity:    0;
+}
+.avp-spa-bar--active {
+  opacity: 1;
+  width:   75%;
+}
+.avp-spa-bar--complete {
+  opacity: 1;
+  width:   100%;
+}

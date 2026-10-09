@@ -106,12 +106,20 @@
       this._bindUI();
       this._updateMuteBtn();
       this._updateFabState();
+      this._initSeamlessNavigation();
+
+      window.addEventListener('pagehide', () => this._persistPlaybackState(true));
+      window.addEventListener('beforeunload', () => this._persistPlaybackState(true));
 
       // Open panel on page load — unless the user already closed it this session
       this.$.panel.style.transition = 'none';
       let closedThisSession = false;
       try {
         closedThisSession = sessionStorage.getItem('avp-panel-closed') === '1';
+        const savedState = JSON.parse(sessionStorage.getItem('avp_playback_state') || 'null');
+        if (savedState && typeof savedState.panelOpen === 'boolean') {
+          closedThisSession = !savedState.panelOpen;
+        }
       } catch (_) {
         closedThisSession = false;
       }
@@ -178,6 +186,7 @@
       panel.setAttribute('aria-hidden', String(!this.panelOpen));
       fab.setAttribute('aria-expanded', String(this.panelOpen));
       this._updateFabState();
+      this._persistPlaybackState(true);
 
       // Remember user preference for this browser session:
       // closed → don't auto-open on next page navigation
@@ -241,7 +250,10 @@
         this._renderTrackList();
         this._setTransportEnabled(this.playlist.length > 0);
 
-        if (!this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
+        // Check if there is an active session playback state to seamlessly resume
+        const restored = this._restorePlaybackState();
+
+        if (!restored && !this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
           this.isMuted = true;
           this._updateMuteBtn();
           this.playAt(0);
@@ -375,7 +387,7 @@
     }
 
     // ─── Core playback ─────────────────────────────────────────────────────────────
-    async playAt(idx) {
+    async playAt(idx, startTime = 0) {
       if (idx < 0 || idx >= this.playlist.length) return;
 
       this._teardown();
@@ -408,7 +420,7 @@
       }
 
       try {
-        await this._playVideo(item, activeCard);
+        await this._playVideo(item, activeCard, startTime);
         // briefly show controls when a track starts
         this._flashControls();
       } catch (err) {
@@ -451,6 +463,7 @@
       this._updateMuteBtn();
       // Hide the toast as soon as the user unmutes
       if (!this.isMuted) this._hideMuteToast();
+      this._persistPlaybackState(true);
     }
 
     _seek(pct) {
@@ -460,7 +473,7 @@
     }
 
     // ─── Native video (MP4 only) ─────────────────────────────────────────────────
-    async _playVideo(item, cardEl) {
+    async _playVideo(item, cardEl, startTime = 0) {
       const mediaEl = cardEl?.querySelector('.avp-card__media') ?? null;
       if (mediaEl) mediaEl.style.display = 'block';
 
@@ -492,6 +505,13 @@
         ) {
           this.$.stage.style.setProperty('--avp-stage-ratio', `${video.videoWidth}/${video.videoHeight}`);
         }
+        if (startTime > 0) {
+          try {
+            if (video.duration && startTime < video.duration) {
+              video.currentTime = startTime;
+            }
+          } catch (_) {}
+        }
       }, { once: true });
 
       if (mediaEl) {
@@ -501,6 +521,10 @@
 
       video.src = item.sourceUrl;
       video.load();
+
+      if (startTime > 0) {
+        try { video.currentTime = startTime; } catch (_) {}
+      }
 
       try {
         await video.play();
@@ -536,6 +560,7 @@
     _tickNative() {
       if (!this.nativeEl) return;
       this._updateProgress(this.nativeEl.currentTime, this.nativeEl.duration);
+      this._persistPlaybackState();
     }
 
     _updateProgress(cur, dur) {
@@ -577,6 +602,7 @@
       this.$.play.querySelector('.avp-pause-icon').style.display = playing ? ''     : 'none';
       this.$.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
       this._updateFabState();
+      this._persistPlaybackState(true);
     }
 
     _updateFabState() {
@@ -655,6 +681,260 @@
       const m = Math.floor(seconds / 60);
       const s = Math.floor(seconds % 60);
       return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // ─── Playback state continuity across page navigation ─────────────────────────
+    _persistPlaybackState(force = false) {
+      if (this.currentIndex < 0 || !this.playlist[this.currentIndex]) return;
+      const now = Date.now();
+      if (!force && this._lastPersist && now - this._lastPersist < 800) return;
+      this._lastPersist = now;
+
+      try {
+        const state = {
+          index:       this.currentIndex,
+          trackId:     this.playlist[this.currentIndex]?.id,
+          currentTime: this.nativeEl ? this.nativeEl.currentTime : 0,
+          isPlaying:   this.isPlaying,
+          isMuted:     this.isMuted,
+          panelOpen:   this.panelOpen,
+          timestamp:   now,
+        };
+        sessionStorage.setItem('avp_playback_state', JSON.stringify(state));
+      } catch (_) {}
+    }
+
+    _restorePlaybackState() {
+      try {
+        const raw = sessionStorage.getItem('avp_playback_state');
+        if (!raw) return false;
+        const state = JSON.parse(raw);
+        if (!state || typeof state.index !== 'number') return false;
+
+        // Only resume if it was actively playing within the last 45 seconds
+        const isRecent = (Date.now() - (state.timestamp || 0)) < 45000;
+        if (!isRecent || !state.isPlaying) return false;
+
+        let targetIndex = state.index;
+        if (state.trackId) {
+          const foundIdx = this.playlist.findIndex((item) => item.id === state.trackId);
+          if (foundIdx !== -1) targetIndex = foundIdx;
+        }
+
+        if (targetIndex >= 0 && targetIndex < this.playlist.length) {
+          this.isMuted = !!state.isMuted;
+          this._updateMuteBtn();
+
+          if (typeof state.panelOpen === 'boolean' && state.panelOpen !== this.panelOpen) {
+            this._togglePanel();
+          }
+
+          this.playAt(targetIndex, state.currentTime || 0);
+          return true;
+        }
+      } catch (err) {
+        console.warn('[AVP] Restore playback error:', err);
+      }
+      return false;
+    }
+
+    // ─── Seamless Zero-Interruption SPA Navigation ────────────────────────────────
+    _initSeamlessNavigation() {
+      if (window._avpSeamlessNavInitialized) return;
+      window._avpSeamlessNavInitialized = true;
+
+      document.addEventListener('click', (e) => {
+        const anchor = e.target.closest('a');
+        if (!anchor) return;
+        if (!this._shouldInterceptLink(anchor, e)) return;
+
+        e.preventDefault();
+        this._navigateTo(anchor.href, true);
+      });
+
+      window.addEventListener('popstate', () => {
+        this._navigateTo(window.location.href, false);
+      });
+    }
+
+    _shouldInterceptLink(anchor, event) {
+      if (event.defaultPrevented) return false;
+      if (event.button !== 0) return false;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
+      if (anchor.target && anchor.target !== '_self') return false;
+      if (anchor.hasAttribute('download')) return false;
+
+      const rawHref = anchor.getAttribute('href');
+      if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+        return false;
+      }
+
+      if (anchor.getAttribute('role') === 'button') return false;
+      if (anchor.closest('[data-no-instant], [data-no-spa], .no-spa, form, .cart-drawer')) return false;
+
+      let targetUrl;
+      try {
+        targetUrl = new URL(anchor.href, window.location.origin);
+      } catch (_) {
+        return false;
+      }
+
+      if (targetUrl.origin !== window.location.origin) return false;
+
+      // Same page anchor link
+      if (targetUrl.pathname === window.location.pathname && targetUrl.search === window.location.search && targetUrl.hash) {
+        return false;
+      }
+
+      // Exclude special Shopify functional paths & assets
+      const p = targetUrl.pathname.toLowerCase();
+      if (
+        p.startsWith('/cart') ||
+        p.startsWith('/checkout') ||
+        p.startsWith('/checkouts') ||
+        p.startsWith('/account') ||
+        p.startsWith('/challenge') ||
+        p.startsWith('/admin') ||
+        p.startsWith('/apps/') ||
+        /\.(js|json|css|pdf|zip|mp4|mov)$/i.test(p)
+      ) {
+        return false;
+      }
+
+      return true;
+    }
+
+    async _navigateTo(url, pushState = true) {
+      this._showSpaProgress();
+      document.documentElement.style.cursor = 'wait';
+
+      try {
+        const res = await fetch(url, {
+          headers: { 'Accept': 'text/html,application/xhtml+xml', 'X-Requested-With': 'AVP-SPA' }
+        });
+
+        if (!res.ok) {
+          window.location.href = url;
+          return;
+        }
+
+        if (res.redirected && res.url) {
+          window.location.href = res.url;
+          return;
+        }
+
+        const html = await res.text();
+        const parser = new DOMParser();
+        const newDoc = parser.parseFromString(html, 'text/html');
+
+        const selectors = [
+          '#MainContent',
+          'main[role="main"]',
+          'main',
+          '#main',
+          '.main-content',
+          '#PageContainer'
+        ];
+
+        let curMain = null;
+        let newMain = null;
+
+        for (const sel of selectors) {
+          const c = document.querySelector(sel);
+          const n = newDoc.querySelector(sel);
+          if (c && n) {
+            curMain = c;
+            newMain = n;
+            break;
+          }
+        }
+
+        if (!curMain || !newMain) {
+          window.location.href = url;
+          return;
+        }
+
+        if (newDoc.title) {
+          document.title = newDoc.title;
+        }
+
+        if (pushState) {
+          window.history.pushState({ avpUrl: url }, '', url);
+        }
+
+        // Add any missing stylesheets from the new page
+        newDoc.querySelectorAll('link[rel="stylesheet"]').forEach((newLink) => {
+          const href = newLink.getAttribute('href');
+          if (href && !document.querySelector(`link[href="${href}"]`)) {
+            document.head.appendChild(newLink.cloneNode(true));
+          }
+        });
+
+        // Swap main content
+        curMain.replaceWith(newMain);
+
+        // Execute new scripts inside newMain so components initialize
+        newMain.querySelectorAll('script').forEach((oldScript) => {
+          if (oldScript.src && document.querySelector(`script[src="${oldScript.src}"]`)) return;
+          const newScript = document.createElement('script');
+          Array.from(oldScript.attributes).forEach((attr) => {
+            newScript.setAttribute(attr.name, attr.value);
+          });
+          newScript.textContent = oldScript.textContent;
+          oldScript.parentNode.replaceChild(newScript, oldScript);
+        });
+
+        // Scroll to hash or top
+        const parsedUrl = new URL(url, window.location.origin);
+        if (parsedUrl.hash) {
+          const targetEl = document.querySelector(parsedUrl.hash);
+          if (targetEl) targetEl.scrollIntoView();
+          else window.scrollTo(0, 0);
+        } else {
+          window.scrollTo(0, 0);
+        }
+
+        // Sync cart count bubble if present
+        const curCart = document.querySelector('[id*="cart-icon-bubble"], .cart-count-bubble');
+        const newCart = newDoc.querySelector('[id*="cart-icon-bubble"], .cart-count-bubble');
+        if (curCart && newCart) {
+          curCart.innerHTML = newCart.innerHTML;
+        }
+
+        // Notify theme and plugins
+        document.dispatchEvent(new CustomEvent('shopify:section:load', { bubbles: true }));
+        document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }));
+        window.dispatchEvent(new Event('resize'));
+        window.dispatchEvent(new Event('scroll'));
+
+      } catch (err) {
+        console.warn('[AVP] SPA navigation fallback:', err.message);
+        window.location.href = url;
+      } finally {
+        this._hideSpaProgress();
+        document.documentElement.style.cursor = '';
+      }
+    }
+
+    _showSpaProgress() {
+      let bar = document.getElementById('avp-spa-bar');
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'avp-spa-bar';
+        bar.className = 'avp-spa-bar';
+        document.body.appendChild(bar);
+      }
+      bar.classList.remove('avp-spa-bar--complete');
+      bar.classList.add('avp-spa-bar--active');
+    }
+
+    _hideSpaProgress() {
+      const bar = document.getElementById('avp-spa-bar');
+      if (!bar) return;
+      bar.classList.add('avp-spa-bar--complete');
+      setTimeout(() => {
+        bar.classList.remove('avp-spa-bar--active', 'avp-spa-bar--complete');
+      }, 350);
     }
   }
 })();
