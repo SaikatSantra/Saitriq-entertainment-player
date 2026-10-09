@@ -13,7 +13,11 @@ api_version = "2027-01"
 scopes = "read_files,read_themes,write_app_proxy,write_files,write_themes"
 
 [auth]
-redirect_urls = [ "https://saitriq-entertainment-player.vercel.app/api/auth" ]
+redirect_urls = [
+  "https://saitriq-entertainment-player.vercel.app/auth/callback",
+  "https://saitriq-entertainment-player.vercel.app/auth/shopify/callback",
+  "https://saitriq-entertainment-player.vercel.app/api/auth"
+]
 
 [app_proxy]
 url = "https://saitriq-entertainment-player.vercel.app"

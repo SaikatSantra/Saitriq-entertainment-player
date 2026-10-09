@@ -80,7 +80,7 @@ export function ErrorBoundary() {
               ? "The page you're looking for doesn't exist."
               : "The app encountered an unexpected error. Please try refreshing."}
           </p>
-          {process.env.NODE_ENV === "development" && message && (
+          {message && (
             <pre
               style={{
                 background: "#f6f6f7",
@@ -89,10 +89,11 @@ export function ErrorBoundary() {
                 fontSize: "12px",
                 textAlign: "left",
                 overflowX: "auto",
+                whiteSpace: "pre-wrap",
                 color: "#d72c0d",
               }}
             >
-              {message}
+              {error?.stack || message}
             </pre>
           )}
         </div>
