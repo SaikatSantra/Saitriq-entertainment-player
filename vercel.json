@@ -3,7 +3,7 @@
   "buildCommand": "npm run build:deploy",
   "installCommand": "npm ci",
   "functions": {
-    "api/index.js": {
+    "api/*.js": {
       "memory": 1024,
       "maxDuration": 30
     }
