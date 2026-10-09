@@ -75,6 +75,7 @@
       this.isMuted        = false;
       this.panelOpen      = false;
       this.drawerOpen     = false;
+      this.userPaused     = false;
       this._progressTimer = null;
       this.nativeEl       = null;
 
@@ -141,8 +142,8 @@
       const { fab, prev, play, next, mute, seek, drawerToggle } = this.$;
 
       fab.addEventListener('click',          () => this._togglePanel());
-      prev.addEventListener('click',         () => this.playPrev());
-      next.addEventListener('click',         () => this.playNext());
+      prev.addEventListener('click',         () => { this._clearUserPaused(); this.playPrev(); });
+      next.addEventListener('click',         () => { this._clearUserPaused(); this.playNext(); });
       play.addEventListener('click',         () => this._togglePlay());
       mute.addEventListener('click',         () => this._toggleMute());
       seek.addEventListener('input',         (e) => this._seek(+e.target.value));
@@ -252,8 +253,9 @@
 
         // Check if there is an active session playback state to seamlessly resume
         const restored = this._restorePlaybackState();
+        const userPaused = this._isUserPaused();
 
-        if (!restored && !this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
+        if (!restored && !userPaused && !this.skipAutoplay && this.autoplay && this.playlist.length > 0) {
           this.isMuted = false;
           this._updateMuteBtn();
           this.playAt(0);
@@ -310,6 +312,7 @@
       card.appendChild(media);
 
       card.addEventListener('click', () => {
+        this._clearUserPaused();
         if (idx !== this.currentIndex) this.playAt(idx);
       });
       return card;
@@ -365,8 +368,10 @@
 
         li.appendChild(type);
         li.appendChild(title);
-        li.appendChild(dot);
-        li.addEventListener('click', () => this.playAt(idx));
+        li.addEventListener('click', () => {
+          this._clearUserPaused();
+          this.playAt(idx);
+        });
         ul.appendChild(li);
       });
     }
@@ -447,13 +452,20 @@
 
     _togglePlay() {
       if (this.currentIndex === -1) {
-        if (this.playlist.length) this.playAt(0);
+        if (this.playlist.length) {
+          this._clearUserPaused();
+          this.playAt(0);
+        }
         return;
       }
       if (this.nativeEl) {
-        this.nativeEl.paused
-          ? this.nativeEl.play().catch(() => {})
-          : this.nativeEl.pause();
+        if (this.nativeEl.paused) {
+          this._clearUserPaused();
+          this.nativeEl.play().catch(() => {});
+        } else {
+          this._setUserPaused();
+          this.nativeEl.pause();
+        }
       }
     }
 
@@ -738,6 +750,31 @@
     }
 
     // ─── Playback state continuity across page navigation ─────────────────────────
+    _setUserPaused() {
+      this.userPaused = true;
+      try {
+        sessionStorage.setItem('avp_user_paused', '1');
+      } catch (_) {}
+      this._persistPlaybackState(true);
+    }
+
+    _clearUserPaused() {
+      this.userPaused = false;
+      try {
+        sessionStorage.removeItem('avp_user_paused');
+      } catch (_) {}
+      this._persistPlaybackState(true);
+    }
+
+    _isUserPaused() {
+      if (this.userPaused) return true;
+      try {
+        return sessionStorage.getItem('avp_user_paused') === '1';
+      } catch (_) {
+        return false;
+      }
+    }
+
     _persistPlaybackState(force = false) {
       if (this.currentIndex < 0 || !this.playlist[this.currentIndex]) return;
       const now = Date.now();
@@ -752,6 +789,7 @@
           isPlaying:   this.isPlaying,
           isMuted:     this.isMuted,
           panelOpen:   this.panelOpen,
+          userPaused:  this._isUserPaused(),
           timestamp:   now,
         };
         sessionStorage.setItem('avp_playback_state', JSON.stringify(state));
@@ -765,10 +803,36 @@
         const state = JSON.parse(raw);
         if (!state || typeof state.index !== 'number') return false;
 
-        // Only resume if it was actively playing within the last 45 seconds
         const isRecent = (Date.now() - (state.timestamp || 0)) < 45000;
-        if (!isRecent || !state.isPlaying) return false;
+        if (!isRecent) return false;
 
+        const isPaused = this._isUserPaused() || state.userPaused === true || !state.isPlaying;
+
+        // If user paused, keep player paused and do NOT trigger autoplay
+        if (isPaused) {
+          let targetIndex = state.index;
+          if (state.trackId) {
+            const foundIdx = this.playlist.findIndex((item) => item.id === state.trackId);
+            if (foundIdx !== -1) targetIndex = foundIdx;
+          }
+          if (targetIndex >= 0 && targetIndex < this.playlist.length) {
+            this.currentIndex = targetIndex;
+            this._stackCards();
+            this._highlightTrack();
+            this._setTransportEnabled(true);
+            const item = this.playlist[targetIndex];
+            if (this.$.overlayInfo) {
+              this.$.overlayInfo.style.display = 'flex';
+              this.$.overlayBadge.textContent  = '🎬 VIDEO';
+              this.$.overlayBadge.className    = 'avp-card__badge avp-card__badge--video';
+              this.$.overlayTitle.textContent  = item.title;
+            }
+            this._setPlayState(false);
+          }
+          return true; // Marked as handled in paused state so autoplay will NOT trigger
+        }
+
+        // If user was actively playing and NOT paused, seamlessly resume
         let targetIndex = state.index;
         if (state.trackId) {
           const foundIdx = this.playlist.findIndex((item) => item.id === state.trackId);
