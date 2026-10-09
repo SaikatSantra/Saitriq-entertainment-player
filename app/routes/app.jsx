@@ -50,28 +50,7 @@ export default function App() {
 }
 
 export function ErrorBoundary() {
-  const error = useRouteError();
-  console.error("APP ROOT ERROR:", error);
-  let errorDetails = "";
-  if (isRouteErrorResponse(error)) {
-    try {
-      const parsed = typeof error.data === "string" ? JSON.parse(error.data) : error.data;
-      errorDetails = JSON.stringify(parsed, null, 2);
-    } catch {
-      errorDetails = String(error.data);
-    }
-  } else {
-    errorDetails = error?.stack || error?.message || (typeof error === "object" ? JSON.stringify(error, Object.getOwnPropertyNames(error), 2) : String(error));
-  }
-
-  return (
-    <div style={{ padding: "40px", fontFamily: "sans-serif" }}>
-      <h2 style={{ color: "#d72c0d" }}>⚠️ Application Error</h2>
-      <pre style={{ background: "#f1f2f3", padding: "16px", borderRadius: "8px", overflow: "auto", whiteSpace: "pre-wrap" }}>
-        {errorDetails}
-      </pre>
-    </div>
-  );
+  return boundary.error(useRouteError());
 }
 
 export const headers = (headersArgs) => {

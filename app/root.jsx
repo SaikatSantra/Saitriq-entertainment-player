@@ -34,6 +34,25 @@ export default function App() {
 export function ErrorBoundary() {
   const error = useRouteError();
 
+  if (
+    isRouteErrorResponse(error) &&
+    typeof error.data === "string" &&
+    error.data.includes("app-bridge.js")
+  ) {
+    return (
+      <html lang="en">
+        <head>
+          <meta charSet="utf-8" />
+          <meta name="viewport" content="width=device-width,initial-scale=1" />
+        </head>
+        <body>
+          <div dangerouslySetInnerHTML={{ __html: error.data }} />
+          <Scripts />
+        </body>
+      </html>
+    );
+  }
+
   const status = isRouteErrorResponse(error) ? error.status : 500;
   const message = isRouteErrorResponse(error)
     ? error.data
